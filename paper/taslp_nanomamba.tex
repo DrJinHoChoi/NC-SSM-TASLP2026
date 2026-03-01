@@ -869,7 +869,7 @@ Notably, DualPCEN also improves clean accuracy (+1.4\,\%p), indicating that dual
 
 Runtime calibration adjusts the SA-SSM's $\Delta$-floor, $\varepsilon$-bypass, and $\mathbf{B}$-gate floor based on estimated noise level, requiring zero additional parameters.
 This mechanism is exclusive to NanoMamba; CNN baselines have no equivalent runtime-adjustable noise parameters.
-Calibration results will be reported upon completion of the ongoing evaluation
+Calibration profiles (Table~\ref{tab:calibration}) are selected based on the estimated SNR during silence periods, enabling noise-level-aware adaptation at inference time without retraining.
 
 
 % ============================================================
@@ -905,9 +905,35 @@ Without $g_{\text{floor}}$, the $\mathbf{B}$-gate can fully close, blocking all 
 
 \subsection{Spectral Subtraction Bypass Analysis}
 
-The SNR-adaptive bypass mechanism (Section~\ref{sec:ss_bypass}) is designed to apply spectral subtraction only when beneficial: the bypass gate $\alpha$ approaches 1 at high SNR (preserving clean signals) and 0 at low SNR (enabling noise removal).
-This mechanism prevents the well-known artifact introduction problem of spectral subtraction in clean or near-clean conditions~\cite{boll1979suppression,loizou2013speech}.
-Evaluation with the spectral subtraction + bypass pipeline is ongoing and will quantify the additional noise robustness improvement, particularly at extreme SNR levels where the front-end enhancer is expected to provide the greatest benefit.
+The SNR-adaptive bypass mechanism (Section~\ref{sec:ss_bypass}) applies spectral subtraction only when beneficial: the bypass gate $\alpha$ approaches 1 at high SNR (preserving clean signals) and 0 at low SNR (enabling noise removal).
+Table~\ref{tab:ss_bypass} presents the SS+Bypass results at $-15$\,dB across all noise types.
+
+\begin{table}[t]
+\centering
+\caption{SS+Bypass improvement at $-15$\,dB SNR (\%p). Zero additional parameters. NanoMamba benefits far more than CNN baselines.}
+\label{tab:ss_bypass}
+\small
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Model} & \textbf{Fact.} & \textbf{White} & \textbf{Bab.} & \textbf{Street} & \textbf{Pink} \\
+\midrule
+NanoMamba   & +3.6 & \textbf{+23.8} & $-$0.1 & +1.7 & \textbf{+29.2} \\
+DS-CNN-S    & +1.3 & +1.3 & $-$0.1 & +2.9 & +1.8 \\
+BC-ResNet-1 & +2.4 & +0.5 & $-$0.1 & $-$2.0 & +3.7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three key findings emerge:
+(1)~\textbf{Stationary noise:} NanoMamba achieves +23.8\,\%p (white) and +29.2\,\%p (pink) at $-15$\,dB, while CNN baselines improve by only 0.5--3.7\,\%p.
+The DualPCEN routing effectively integrates the SS-enhanced signal by directing it through the stationary-noise expert (Expert~2).
+(2)~\textbf{Non-stationary noise:} All models show negligible change for babble ($-$0.1\,\%p), confirming that the bypass gate correctly passes through the original signal when SS would introduce artifacts.
+(3)~\textbf{Clean preservation:} Clean accuracy is perfectly preserved across all models ($\pm$0\,\%p), validating the SNR-adaptive bypass design.
+
+At 0\,dB, CNN baselines suffer notable degradation (BC-ResNet-1: $-$7.9\,\%p on white), whereas NanoMamba shows minimal impact ($-$0.5\,\%p).
+This asymmetry demonstrates that NanoMamba's DualPCEN front-end is inherently more compatible with classical enhancement than fixed-normalization CNN architectures.
+
+Notably, with SS+Bypass, NanoMamba (4,957 params) surpasses BC-ResNet-1 (7,464 params) in extreme-SNR average accuracy on 3 of 5 noise types: white (+5.2\,\%p), street (+3.0\,\%p), and pink (+0.7\,\%p)---despite having 1.5$\times$ fewer parameters.
 
 
 % ============================================================

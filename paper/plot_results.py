@@ -75,6 +75,38 @@ ROUTING_DATA = {
 }
 
 # ============================================================================
+# SS+Bypass Results: Spectral Subtraction + SNR-Adaptive Bypass (0 extra params)
+# All models noise-aug trained, evaluated with SS+Bypass front-end
+# Order: [-15dB, -10dB, -5dB, 0dB, 5dB, 10dB, 15dB, clean]
+# ============================================================================
+RESULTS_SS_BYPASS = {
+    'NanoMamba-Tiny-DualPCEN': {
+        'params': 4957, 'label': 'NanoMamba (5.0K)',
+        'factory': [62.2, 69.6, 77.2, 83.7, 86.9, 89.9, 90.8, 93.7],
+        'white':   [61.4, 68.7, 77.4, 84.1, 88.2, 90.2, 91.5, 93.6],
+        'babble':  [70.5, 77.2, 83.2, 87.8, 90.5, 91.3, 92.0, 93.8],
+        'street':  [59.9, 66.8, 73.1, 80.9, 85.1, 89.5, 91.1, 93.8],
+        'pink':    [57.5, 70.6, 79.1, 85.5, 88.9, 91.1, 92.3, 93.8],
+    },
+    'DS-CNN-S': {
+        'params': 23756, 'label': 'DS-CNN-S (23.8K)',
+        'factory': [65.7, 73.1, 81.6, 88.1, 91.8, 94.4, 94.9, 96.8],
+        'white':   [63.0, 70.3, 79.9, 86.5, 91.4, 93.7, 94.5, 96.8],
+        'babble':  [79.1, 85.6, 89.9, 92.5, 93.6, 94.6, 95.2, 96.8],
+        'street':  [64.0, 73.0, 79.8, 86.0, 90.8, 93.6, 94.6, 96.8],
+        'pink':    [63.0, 69.7, 80.5, 87.2, 92.1, 94.2, 94.9, 96.8],
+    },
+    'BC-ResNet-1': {
+        'params': 7464, 'label': 'BC-ResNet-1 (7.5K)',
+        'factory': [66.9, 74.4, 81.2, 86.3, 90.5, 92.3, 93.5, 95.3],
+        'white':   [59.1, 63.1, 69.7, 78.0, 87.5, 92.1, 93.3, 95.3],
+        'babble':  [76.6, 84.0, 89.0, 92.3, 93.5, 94.1, 94.7, 95.3],
+        'street':  [56.2, 63.0, 71.6, 80.2, 88.4, 92.5, 93.7, 95.3],
+        'pink':    [62.0, 66.3, 76.7, 83.8, 90.2, 93.4, 94.2, 95.3],
+    },
+}
+
+# ============================================================================
 # Clean-Only Trained Results (from Interspeech experiments, NO noise-aug)
 # Order: [-15dB, -10dB, -5dB, 0dB, 5dB, 10dB, 15dB]  (no 'clean' in noise eval)
 # ============================================================================
@@ -770,6 +802,180 @@ def plot_routing_analysis():
 
 
 # ============================================================================
+# SS+Bypass: Baseline vs Enhanced Comparison
+# ============================================================================
+
+def plot_ss_bypass_comparison():
+    """Fig: SS+Bypass improvement across all models and noise types."""
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.5))
+
+    noises = NOISE_TYPES
+    labels = [NOISE_LABELS[n] for n in noises]
+    models_list = ['NanoMamba-Tiny-DualPCEN', 'DS-CNN-S', 'BC-ResNet-1']
+    colors = ['#2563EB', '#DC2626', '#16A34A']
+    short_labels = ['NanoMamba', 'DS-CNN-S', 'BC-ResNet-1']
+
+    for panel_idx, (snr_idx, snr_label, title) in enumerate([
+        (0, '-15dB', '(a) Improvement at -15 dB SNR'),
+        (3, '0dB', '(b) Change at 0 dB SNR'),
+    ]):
+        ax = axes[panel_idx]
+        x = np.arange(len(noises))
+        w = 0.22
+
+        for i, (mname, color, slabel) in enumerate(zip(models_list, colors, short_labels)):
+            deltas = []
+            for noise in noises:
+                base = RESULTS[mname][noise][snr_idx]
+                ss = RESULTS_SS_BYPASS[mname][noise][snr_idx]
+                deltas.append(ss - base)
+            bars = ax.bar(x + (i - 1) * w, deltas, w * 0.9,
+                         color=color, alpha=0.85, label=slabel,
+                         edgecolor='white', linewidth=0.5)
+            # Annotate values
+            for j, (bar, d) in enumerate(zip(bars, deltas)):
+                va = 'bottom' if d >= 0 else 'top'
+                offset = 0.3 if d >= 0 else -0.3
+                ax.text(bar.get_x() + bar.get_width() / 2, d + offset,
+                       f'{d:+.1f}', ha='center', va=va, fontsize=6.5,
+                       fontweight='bold', color=color)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels)
+        ax.set_ylabel('Accuracy Change (%p)')
+        ax.set_title(title, fontweight='bold')
+        ax.axhline(y=0, color='black', linewidth=0.8, linestyle='-')
+        ax.grid(axis='y', alpha=0.3)
+        if panel_idx == 0:
+            ax.legend(fontsize=7, loc='upper left')
+
+    fig.suptitle('Spectral Subtraction + SNR-Adaptive Bypass (0 extra params)',
+                 fontsize=11, fontweight='bold', y=1.02)
+    fig.tight_layout()
+    out = os.path.join(OUT_DIR, f'fig_ss_bypass.{EXT}')
+    fig.savefig(out, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  Saved: {out}")
+
+
+def plot_ss_bypass_snr_curves():
+    """Fig: Full SNR curves — baseline (dashed) vs SS+Bypass (solid) for NanoMamba."""
+    fig, axes = plt.subplots(1, 5, figsize=(14, 3.2), sharey=True)
+
+    nm = 'NanoMamba-Tiny-DualPCEN'
+    bc = 'BC-ResNet-1'
+
+    for i, noise in enumerate(NOISE_TYPES):
+        ax = axes[i]
+        # NanoMamba baseline (dashed)
+        ax.plot(SNR_TICKS, RESULTS[nm][noise],
+                color='#2563EB', ls='--', lw=1.2, alpha=0.5,
+                marker='o', ms=3, label='NM base')
+        # NanoMamba SS+Bypass (solid)
+        ax.plot(SNR_TICKS, RESULTS_SS_BYPASS[nm][noise],
+                color='#2563EB', ls='-', lw=2, marker='o', ms=4,
+                label='NM +SS')
+        # BC-ResNet-1 baseline (dashed gray)
+        ax.plot(SNR_TICKS, RESULTS[bc][noise],
+                color='#16A34A', ls='--', lw=1.2, alpha=0.5,
+                marker='s', ms=3, label='BC base')
+        # BC-ResNet-1 SS+Bypass (solid)
+        ax.plot(SNR_TICKS, RESULTS_SS_BYPASS[bc][noise],
+                color='#16A34A', ls='-', lw=1.5, marker='s', ms=3,
+                label='BC +SS')
+
+        # Shade improvement region for NanoMamba
+        base_arr = np.array(RESULTS[nm][noise])
+        ss_arr = np.array(RESULTS_SS_BYPASS[nm][noise])
+        ax.fill_between(SNR_TICKS, base_arr, ss_arr,
+                        where=ss_arr > base_arr,
+                        alpha=0.15, color='#2563EB')
+
+        ax.set_xticks(SNR_TICKS)
+        ax.set_xticklabels(SNR_LABELS, fontsize=7)
+        ax.set_title(NOISE_LABELS[noise], fontweight='bold', fontsize=9)
+        ax.set_ylim(20, 100)
+        ax.grid(alpha=0.3)
+        if i == 0:
+            ax.set_ylabel('Accuracy (%)')
+            ax.legend(fontsize=6, loc='lower right')
+
+    fig.suptitle('NanoMamba (5K) vs BC-ResNet-1 (7.5K): Baseline vs +SS+Bypass',
+                 fontsize=10, fontweight='bold', y=1.02)
+    fig.tight_layout()
+    out = os.path.join(OUT_DIR, f'fig_ss_bypass_curves.{EXT}')
+    fig.savefig(out, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  Saved: {out}")
+
+
+def plot_ss_bypass_wins():
+    """Fig: Where NanoMamba (5K) beats BC-ResNet-1 (7.5K) with SS+Bypass."""
+    fig, ax = plt.subplots(figsize=(8, 4))
+
+    noises = NOISE_TYPES
+    nm = 'NanoMamba-Tiny-DualPCEN'
+    bc = 'BC-ResNet-1'
+
+    # Compute extreme SNR average (-15, -10, -5 dB) = indices 0,1,2
+    nm_extreme = []
+    bc_extreme = []
+    for noise in noises:
+        nm_avg = np.mean(RESULTS_SS_BYPASS[nm][noise][:3])
+        bc_avg = np.mean(RESULTS_SS_BYPASS[bc][noise][:3])
+        nm_extreme.append(nm_avg)
+        bc_extreme.append(bc_avg)
+
+    x = np.arange(len(noises))
+    w = 0.3
+    bars_nm = ax.bar(x - w/2, nm_extreme, w, color='#2563EB', alpha=0.85,
+                     label=f'NanoMamba (5.0K)', edgecolor='white')
+    bars_bc = ax.bar(x + w/2, bc_extreme, w, color='#16A34A', alpha=0.85,
+                     label=f'BC-ResNet-1 (7.5K)', edgecolor='white')
+
+    # Annotate with delta and winner
+    for i in range(len(noises)):
+        delta = nm_extreme[i] - bc_extreme[i]
+        winner = delta > 0
+        y_pos = max(nm_extreme[i], bc_extreme[i]) + 1.5
+        color = '#2563EB' if winner else '#16A34A'
+        symbol = 'NM WINS' if winner else 'BC wins'
+        ax.text(x[i], y_pos, f'{delta:+.1f}%p\n{symbol}',
+               ha='center', va='bottom', fontsize=8, fontweight='bold',
+               color=color)
+        # Values on bars
+        ax.text(x[i] - w/2, nm_extreme[i] + 0.3, f'{nm_extreme[i]:.1f}',
+               ha='center', va='bottom', fontsize=7, color='#2563EB')
+        ax.text(x[i] + w/2, bc_extreme[i] + 0.3, f'{bc_extreme[i]:.1f}',
+               ha='center', va='bottom', fontsize=7, color='#16A34A')
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([NOISE_LABELS[n] for n in noises])
+    ax.set_ylabel('Avg Accuracy at Extreme SNR (-15,-10,-5 dB)')
+    ax.set_title('SS+Bypass: NanoMamba (5K) vs BC-ResNet-1 (7.5K) at Extreme Noise',
+                fontweight='bold')
+    ax.legend(loc='upper right')
+    ax.set_ylim(50, 90)
+    ax.grid(axis='y', alpha=0.3)
+
+    # Summary text
+    wins = sum(1 for i in range(len(noises)) if nm_extreme[i] > bc_extreme[i])
+    ax.text(0.02, 0.02,
+           f'NanoMamba wins {wins}/{len(noises)} noise types\n'
+           f'with 1.5x FEWER params & 10x fewer MACs',
+           transform=ax.transAxes, fontsize=8,
+           va='bottom', ha='left',
+           bbox=dict(boxstyle='round,pad=0.4', facecolor='#EFF6FF',
+                     edgecolor='#2563EB', alpha=0.9))
+
+    fig.tight_layout()
+    out = os.path.join(OUT_DIR, f'fig_ss_bypass_wins.{EXT}')
+    fig.savefig(out, bbox_inches='tight')
+    plt.close(fig)
+    print(f"  Saved: {out}")
+
+
+# ============================================================================
 # Main
 # ============================================================================
 if __name__ == '__main__':
@@ -786,6 +992,9 @@ if __name__ == '__main__':
     plot_structural_summary()
     plot_per_noise_clean_only()
     plot_routing_analysis()
+    plot_ss_bypass_comparison()
+    plot_ss_bypass_snr_curves()
+    plot_ss_bypass_wins()
 
     print(f"\nDone! All figures saved to: {OUT_DIR}/")
     print(f"\nKey observations:")
