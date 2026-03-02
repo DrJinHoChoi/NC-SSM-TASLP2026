@@ -40,6 +40,15 @@ RESULTS = {
         'street':  [61.1, 69.4, 81.5, 88.9, 92.8, 95.0, 95.9, 96.8],
         'pink':    [61.2, 66.4, 82.7, 90.6, 93.8, 95.1, 95.9, 96.8],
     },
+    'NanoMamba-Matched-DualPCEN': {
+        'params': 7402,
+        'label': 'NanoMamba-M (7.4K)',
+        'factory': [61.1, 70.6, 82.3, 88.5, 91.4, 93.0, 93.8, 95.1],
+        'white':   [31.1, 59.1, 75.0, 85.5, 89.8, 92.8, 93.9, 95.1],
+        'babble':  [71.4, 79.0, 86.0, 91.0, 93.0, 93.9, 94.5, 95.1],
+        'street':  [57.6, 64.2, 73.9, 83.8, 88.4, 92.4, 94.2, 95.1],
+        'pink':    [23.6, 52.4, 76.9, 87.3, 91.7, 93.0, 94.4, 95.2],
+    },
     'BC-ResNet-1': {
         'params': 7464,
         'label': 'BC-ResNet-1 (7.5K)',
@@ -146,9 +155,10 @@ NOISE_LABELS = {'factory': 'Factory', 'white': 'White',
 
 # Style
 MODEL_STYLES = {
-    'NanoMamba-Tiny-DualPCEN': dict(color='#2563EB', marker='o', ls='-', lw=2.2, ms=7, zorder=3),
-    'DS-CNN-S':               dict(color='#DC2626', marker='^', ls='--', lw=1.8, ms=7, zorder=2),
-    'BC-ResNet-1':            dict(color='#16A34A', marker='s', ls='-.', lw=1.8, ms=6, zorder=2),
+    'NanoMamba-Tiny-DualPCEN':    dict(color='#2563EB', marker='o', ls='-', lw=2.2, ms=7, zorder=3),
+    'NanoMamba-Matched-DualPCEN': dict(color='#7C3AED', marker='D', ls='-', lw=2.2, ms=6, zorder=3),
+    'DS-CNN-S':                   dict(color='#DC2626', marker='^', ls='--', lw=1.8, ms=7, zorder=2),
+    'BC-ResNet-1':                dict(color='#16A34A', marker='s', ls='-.', lw=1.8, ms=6, zorder=2),
 }
 
 # Output dir
@@ -205,7 +215,7 @@ def plot_snr_accuracy():
 
     # Single legend at top
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', ncol=3,
+    fig.legend(handles, labels, loc='upper center', ncol=4,
                bbox_to_anchor=(0.5, 1.08), frameon=True,
                fancybox=True, shadow=False)
 
@@ -244,7 +254,8 @@ def plot_param_efficiency():
     snr_indices = [0, 3, 7]  # -15dB, 0dB, clean
     snr_names = ['-15dB', '0dB', 'Clean']
     x = np.arange(len(snr_names))
-    width = 0.25
+    n_models = len(RESULTS)
+    width = 0.8 / n_models
 
     for i, (model_name, data) in enumerate(RESULTS.items()):
         s = MODEL_STYLES[model_name]
@@ -255,7 +266,7 @@ def plot_param_efficiency():
             avg_acc = np.mean([data[n][si] for n in NOISE_TYPES])
             effs.append(avg_acc / params_k)
 
-        bars = ax.bar(x + (i - 1) * width, effs, width,
+        bars = ax.bar(x + (i - (n_models-1)/2) * width, effs, width,
                        color=s['color'], alpha=0.85,
                        label=data['label'], edgecolor='white', linewidth=0.5)
         # Value labels
@@ -368,13 +379,14 @@ def plot_extreme_bar():
     fig, ax = plt.subplots(figsize=(6, 3))
 
     x = np.arange(len(NOISE_TYPES))
-    width = 0.25
+    n_models = len(RESULTS)
+    width = 0.8 / n_models
 
     for i, (model_name, data) in enumerate(RESULTS.items()):
         s = MODEL_STYLES[model_name]
         # Average of -15, -10, -5 dB (indices 0, 1, 2)
         extreme_avgs = [np.mean(data[n][:3]) for n in NOISE_TYPES]
-        bars = ax.bar(x + (i - 1) * width, extreme_avgs, width,
+        bars = ax.bar(x + (i - (n_models-1)/2) * width, extreme_avgs, width,
                        color=s['color'], alpha=0.85,
                        label=data['label'], edgecolor='white', linewidth=0.5)
         for bar, val in zip(bars, extreme_avgs):
@@ -414,13 +426,11 @@ def plot_per_noise():
                     label=data['label'])
             # Annotate each point
             for xi, yi in zip(SNR_TICKS, vals):
-                offset_y = 2.5 if model_name == 'NanoMamba-Tiny-DualPCEN' else -4.5
-                if model_name == 'BC-ResNet-1':
-                    offset_y = -4.5 if yi < data[noise][-1] else 2.5
+                offset_y = 2.5 if 'NanoMamba' in model_name else -4.5
                 ax.annotate(f'{yi:.1f}', (xi, yi),
                             textcoords="offset points",
                             xytext=(0, offset_y),
-                            ha='center', fontsize=7,
+                            ha='center', fontsize=6.5,
                             color=s['color'], fontweight='bold')
 
         # Highlight zones
@@ -428,14 +438,14 @@ def plot_per_noise():
         ax.axhspan(0, 70, color='red', alpha=0.04)
         ax.axhline(y=90, color='gray', ls=':', lw=0.8, alpha=0.5)
 
-        # Gap annotation at 0dB
-        nm_0db = RESULTS['NanoMamba-Tiny-DualPCEN'][noise][3]
-        ds_0db = RESULTS['DS-CNN-S'][noise][3]
-        gap = ds_0db - nm_0db
-        ax.annotate(f'Gap: {gap:.1f}%p',
-                    xy=(3, (nm_0db + ds_0db) / 2),
-                    fontsize=8, color='#666666', ha='left',
-                    xytext=(3.4, (nm_0db + ds_0db) / 2),
+        # Gap annotation at 0dB: Matched vs BC-ResNet-1 (param-matched)
+        nm_0db = RESULTS['NanoMamba-Matched-DualPCEN'][noise][3]
+        bc_0db = RESULTS['BC-ResNet-1'][noise][3]
+        gap = bc_0db - nm_0db
+        ax.annotate(f'NM-M vs BC: {gap:+.1f}%p',
+                    xy=(3, (nm_0db + bc_0db) / 2),
+                    fontsize=7, color='#666666', ha='left',
+                    xytext=(3.4, (nm_0db + bc_0db) / 2),
                     arrowprops=dict(arrowstyle='-', color='#999999', lw=0.8))
 
         ax.set_title(f'{NOISE_LABELS[noise]} Noise - SNR vs Accuracy',
@@ -449,7 +459,7 @@ def plot_per_noise():
                   framealpha=0.9, edgecolor='gray')
 
         # Parameter info box
-        info = "Params: NanoMamba 5.0K | DS-CNN-S 23.8K | BC-ResNet-1 7.5K"
+        info = "NM-Tiny 5.0K | NM-Matched 7.4K | DS-CNN-S 23.8K | BC-ResNet-1 7.5K"
         ax.text(0.5, 0.02, info, transform=ax.transAxes,
                 fontsize=7, ha='center', color='gray', style='italic')
 
@@ -811,9 +821,9 @@ def plot_ss_bypass_comparison():
 
     noises = NOISE_TYPES
     labels = [NOISE_LABELS[n] for n in noises]
-    models_list = ['NanoMamba-Tiny-DualPCEN', 'DS-CNN-S', 'BC-ResNet-1']
-    colors = ['#2563EB', '#DC2626', '#16A34A']
-    short_labels = ['NanoMamba', 'DS-CNN-S', 'BC-ResNet-1']
+    models_list = list(RESULTS_SS_BYPASS.keys())
+    colors = [MODEL_STYLES[m]['color'] if m in MODEL_STYLES else '#888888' for m in models_list]
+    short_labels = [RESULTS_SS_BYPASS[m]['label'] for m in models_list]
 
     for panel_idx, (snr_idx, snr_label, title) in enumerate([
         (0, '-15dB', '(a) Improvement at -15 dB SNR'),
@@ -821,7 +831,8 @@ def plot_ss_bypass_comparison():
     ]):
         ax = axes[panel_idx]
         x = np.arange(len(noises))
-        w = 0.22
+        n_m = len(models_list)
+        w = 0.8 / n_m
 
         for i, (mname, color, slabel) in enumerate(zip(models_list, colors, short_labels)):
             deltas = []
@@ -829,7 +840,7 @@ def plot_ss_bypass_comparison():
                 base = RESULTS[mname][noise][snr_idx]
                 ss = RESULTS_SS_BYPASS[mname][noise][snr_idx]
                 deltas.append(ss - base)
-            bars = ax.bar(x + (i - 1) * w, deltas, w * 0.9,
+            bars = ax.bar(x + (i - (n_m-1)/2) * w, deltas, w * 0.9,
                          color=color, alpha=0.85, label=slabel,
                          edgecolor='white', linewidth=0.5)
             # Annotate values
