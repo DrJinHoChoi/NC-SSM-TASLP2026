@@ -1831,6 +1831,112 @@ class SpectralEnhancer(nn.Module):
 
 
 # ============================================================================
+# Learnable Spectral Enhancer (differentiable, 516 params)
+# ============================================================================
+
+class LearnableSpectralEnhancer(nn.Module):
+    """Differentiable Wiener-style spectral enhancement on STFT magnitude.
+
+    Replaces the non-learnable SpectralEnhancer with a trainable version
+    that operates directly on STFT magnitude (inside the STFT pipeline)
+    rather than on raw waveforms (before STFT).
+
+    Key differences from SpectralEnhancer:
+      1. Operates on mag (B, F, T) — no redundant STFT/iSTFT
+      2. Per-frequency learnable oversubtraction and spectral floor
+      3. Gain computation is differentiable (end-to-end learning)
+      4. Noise estimation remains detached (stable training)
+      5. Simple SNR-adaptive bypass (2 learnable params)
+
+    The learnable gain enables the network to optimize noise suppression
+    specifically for KWS accuracy — not generic SNR improvement — by
+    learning which frequency bands to suppress and how aggressively,
+    through end-to-end backpropagation from the classification loss.
+
+    Parameters: 257 (oversub) + 257 (floor) + 1 (bypass_scale) + 1 (bypass_thresh) = 516
+    """
+
+    def __init__(self, n_freq=257, alpha_noise=0.95):
+        super().__init__()
+        self.n_freq = n_freq
+        self.alpha_noise = alpha_noise
+
+        # Per-frequency oversubtraction factor (learned)
+        # softplus(0.5) ≈ 0.97 → effective oversubtraction starts near 1.0
+        self.oversub_raw = nn.Parameter(torch.full((n_freq,), 0.5))
+
+        # Per-frequency spectral floor (learned)
+        # sigmoid(-1.5) ≈ 0.18 → reasonable starting floor
+        self.floor_raw = nn.Parameter(torch.full((n_freq,), -1.5))
+
+        # Bypass parameters (learned)
+        self.bypass_scale = nn.Parameter(torch.tensor(1.5))
+        self.bypass_threshold = nn.Parameter(torch.tensor(8.0))
+
+    def _running_min_noise(self, mag):
+        """Running minimum statistics noise estimation (detached).
+
+        Same algorithm as SpectralEnhancer._wiener_gain_filter noise
+        estimation.  Tracks a slowly-varying noise floor using exponential
+        smoothing of local minimum statistics.
+
+        Args:
+            mag: (B, F, T) magnitude spectrogram
+        Returns:
+            noise_est: (B, F, T) estimated noise floor (detached)
+        """
+        B, F, T = mag.shape
+        n_init = min(5, T)
+        noise_est = mag[..., :n_init].mean(
+            dim=-1, keepdim=True).expand_as(mag).clone()
+
+        for t in range(1, T):
+            frame_mag = mag[..., t:t + 1]
+            local_min = torch.minimum(frame_mag, noise_est[..., t - 1:t])
+            noise_est[..., t:t + 1] = (
+                self.alpha_noise * noise_est[..., t - 1:t]
+                + (1.0 - self.alpha_noise) * local_min
+            )
+        return noise_est
+
+    def forward(self, mag):
+        """Apply learnable Wiener gain with SNR-adaptive bypass.
+
+        Noise estimation is wrapped in ``torch.no_grad()`` for training
+        stability.  Only the gain computation and bypass gate are
+        differentiable, allowing end-to-end optimization.
+
+        Args:
+            mag: (B, n_freq, T) magnitude spectrogram from STFT
+        Returns:
+            enhanced_mag: (B, n_freq, T) enhanced magnitude
+        """
+        # 1. Noise estimation (detached — stable target, no vanishing grads)
+        with torch.no_grad():
+            noise_est = self._running_min_noise(mag)
+
+        # 2. Learnable Wiener gain (differentiable)
+        oversub = F.softplus(self.oversub_raw).view(1, -1, 1)  # (1, F, 1)
+        floor = torch.sigmoid(self.floor_raw).view(1, -1, 1)   # (1, F, 1)
+
+        noise_ratio = (oversub * noise_est) / (mag + 1e-8)
+        gain = torch.clamp(1.0 - noise_ratio.pow(2), min=0.0)
+        gain = torch.maximum(gain, floor)
+        enhanced = mag * gain
+
+        # 3. Per-frame SNR-adaptive bypass
+        frame_snr = 10.0 * torch.log10(
+            mag.pow(2).mean(dim=1, keepdim=True) /
+            (noise_est.pow(2).mean(dim=1, keepdim=True) + 1e-10) + 1e-10
+        )  # (B, 1, T)
+        gate = torch.sigmoid(
+            self.bypass_scale * (frame_snr - self.bypass_threshold))
+
+        # gate ≈ 1 → original mag (clean), gate ≈ 0 → enhanced (noisy)
+        return gate * mag + (1.0 - gate) * enhanced
+
+
+# ============================================================================
 # NanoMamba Block
 # ============================================================================
 
@@ -1940,6 +2046,7 @@ class NanoMamba(nn.Module):
                  use_dual_pcen_v2=False, use_multi_pcen_v2=False,
                  use_ssm_v2=False,
                  use_spectral_enhancer=False,
+                 use_learnable_enhancer=False,
                  weight_sharing=False, n_repeats=3):
         """
         Args:
@@ -2011,11 +2118,22 @@ class NanoMamba(nn.Module):
         self.use_multi_pcen_v2 = use_multi_pcen_v2
         self.use_ssm_v2 = use_ssm_v2
         self.use_spectral_enhancer = use_spectral_enhancer
+        self.use_learnable_enhancer = use_learnable_enhancer
+
+        # Mutual exclusion: waveform-domain vs magnitude-domain enhancer
+        assert not (use_spectral_enhancer and use_learnable_enhancer), \
+            "Cannot use both SpectralEnhancer (waveform) and " \
+            "LearnableSpectralEnhancer (magnitude) simultaneously"
 
         # -1. Integrated Spectral Enhancement (0 params, before STFT)
         if use_spectral_enhancer:
             self.spectral_enhancer = SpectralEnhancer(
                 n_fft=n_fft, hop_length=hop_length)
+
+        # -1b. Learnable Spectral Enhancement (516 params, on STFT magnitude)
+        if use_learnable_enhancer:
+            self.learnable_enhancer = LearnableSpectralEnhancer(
+                n_freq=n_freq, alpha_noise=0.95)
 
         # 0. Frequency processing plug-in (optional, mutually exclusive)
         if use_freq_filter:
@@ -2143,15 +2261,21 @@ class NanoMamba(nn.Module):
         if self.use_freq_conv:
             mag = self.freq_conv(mag)
 
-        # SNR estimation (before mel projection)
+        # SNR estimation from ORIGINAL magnitude (accurate noise level for SA-SSM)
         snr_mel = self.snr_estimator(mag, self.mel_fb)  # (B, n_mels, T)
+
+        # [NOVEL] Learnable Spectral Enhancement: differentiable Wiener gain
+        # Applied AFTER SNR estimation (SNR sees original noise level) but
+        # BEFORE mel projection (mel features benefit from cleaner magnitude).
+        if self.use_learnable_enhancer:
+            mag = self.learnable_enhancer(mag)
 
         # [NOVEL] MoE-Freq: SNR-conditioned frequency filtering
         # Applied AFTER SNR estimation so gating can use noise fingerprint
         if self.use_moe_freq:
             mag = self.moe_freq(mag, snr_mel)
 
-        # Mel features
+        # Mel features (from possibly enhanced magnitude)
         mel = torch.matmul(self.mel_fb, mag)  # (B, n_mels, T)
 
         # [NOVEL] CNN structural noise robustness: 2D conv on mel spectrogram
@@ -2737,6 +2861,53 @@ def create_nanomamba_matched_dualpcen_v2_ssmv2_se(n_classes=12):
         d_model=21, d_state=5, d_conv=3, expand=1.5,
         n_layers=2, use_dual_pcen_v2=True, use_ssm_v2=True,
         use_spectral_enhancer=True, use_tiny_conv=True)
+
+
+# ============================================================================
+# Learnable Spectral Enhancement (LSE) variants
+# ============================================================================
+
+def create_nanomamba_tiny_dualpcen_v2_ssmv2_lse(n_classes=12):
+    """NanoMamba-Tiny-LSE: Complete model with Learnable Spectral Enhancement.
+
+    Full pipeline (~5,483 params):
+      1. LearnableSpectralEnhancer: differentiable Wiener gain (+516 params)
+         - Per-frequency learnable oversubtraction (257)
+         - Per-frequency learnable spectral floor (257)
+         - Learnable SNR-adaptive bypass (2)
+      2. TinyConv2D: 3x3 cross-band feature mixing (+10 params)
+      3. DualPCEN v2: TMI + SNR-conditioned routing + SNR-adaptive AGC speed
+      4. SA-SSM v2: Michaelis-Menten SNR re-norm + per-frame gate conditioning
+
+    Key advantage over SpectralEnhancer (SE):
+      - SE has 0 learnable params (fixed Wiener gain, @torch.no_grad)
+      - LSE has 516 learnable params (end-to-end optimized for KWS accuracy)
+      - LSE operates on STFT magnitude (no redundant STFT/iSTFT)
+    """
+    return NanoMamba(
+        n_mels=40, n_classes=n_classes,
+        d_model=16, d_state=4, d_conv=3, expand=1.5,
+        n_layers=2, use_dual_pcen_v2=True, use_ssm_v2=True,
+        use_learnable_enhancer=True, use_tiny_conv=True)
+
+
+def create_nanomamba_matched_dualpcen_v2_ssmv2_lse(n_classes=12):
+    """NanoMamba-Matched-LSE: param-matched with Learnable Spectral Enhancement.
+
+    ~7,938 params — comparable to BC-ResNet-1 (7,464 params).
+    Full v2 pipeline with learnable spectral enhancement.
+
+    Complete noise defense chain:
+      - LearnableSpectralEnhancer: end-to-end trained noise suppression (516 params)
+      - TinyConv2D: cross-band pattern detection (+10 params)
+      - DualPCEN v2: adaptive AGC + routing for all noise types
+      - SA-SSM v2: SNR-aware temporal modeling
+    """
+    return NanoMamba(
+        n_mels=40, n_classes=n_classes,
+        d_model=21, d_state=5, d_conv=3, expand=1.5,
+        n_layers=2, use_dual_pcen_v2=True, use_ssm_v2=True,
+        use_learnable_enhancer=True, use_tiny_conv=True)
 
 
 # ============================================================================

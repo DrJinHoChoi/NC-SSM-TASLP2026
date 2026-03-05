@@ -86,6 +86,9 @@ try:
         # Complete model: v2 + SSMv2 + Integrated Spectral Enhancement
         create_nanomamba_tiny_dualpcen_v2_ssmv2_se,
         create_nanomamba_matched_dualpcen_v2_ssmv2_se,
+        # Learnable Spectral Enhancement (differentiable Wiener gain, 516 params)
+        create_nanomamba_tiny_dualpcen_v2_ssmv2_lse,
+        create_nanomamba_matched_dualpcen_v2_ssmv2_lse,
         # FI-Mamba: Frequency-Interleaved Mamba (spectral + temporal SSM)
         create_fimamba_matched,
         create_fimamba_small,
@@ -2112,6 +2115,9 @@ MODEL_REGISTRY = {
     # Complete model: v2 + SSMv2 + Integrated Spectral Enhancement (0 extra params)
     'NanoMamba-Tiny-SE': create_nanomamba_tiny_dualpcen_v2_ssmv2_se,
     'NanoMamba-Matched-SE': create_nanomamba_matched_dualpcen_v2_ssmv2_se,
+    # Learnable Spectral Enhancement: differentiable Wiener gain (516 extra params)
+    'NanoMamba-Tiny-LSE': create_nanomamba_tiny_dualpcen_v2_ssmv2_lse,
+    'NanoMamba-Matched-LSE': create_nanomamba_matched_dualpcen_v2_ssmv2_lse,
     # FI-Mamba: Frequency-Interleaved Mamba (unified spectral+temporal SSM)
     'FI-Mamba': create_fimamba_matched,
     'FI-Mamba-Small': create_fimamba_small,
