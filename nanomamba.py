@@ -33,6 +33,7 @@ Paper: Interspeech 2026
 """
 
 import math
+import random
 import numpy as np
 import torch
 import torch.nn as nn
@@ -1340,6 +1341,153 @@ class SpectralAwareSSM_v2(nn.Module):
 
 
 # ============================================================================
+# Selectivity-Modulated SA-SSM (SM-SSM)
+# ============================================================================
+
+class SelectivityModulatedSSM(SpectralAwareSSM_v2):
+    """Selectivity-Modulated SA-SSM: CNN-like noise immunity meets SSM adaptivity.
+
+    Key insight — Selective SSM vs CNN noise propagation:
+      CNN:  y = W·x → noise enters ADDITIVELY through fixed filters W
+      SSM:  Δ,B,C = f(x) → noise enters MULTIPLICATIVELY through input-dependent
+            selection parameters. At low SNR, x ≈ noise, so Δ·B·x = noise³.
+
+    Solution — SNR-adaptive selectivity:
+      σ = sigmoid(scale · SNR + bias)     ← learnable transition
+      Δ = σ · Δ_selective + (1-σ) · Δ_fixed
+      B = σ · B_selective + (1-σ) · B_fixed
+      C = σ · C_selective + (1-σ) · C_fixed
+
+      High SNR (σ≈1): fully selective = Standard Mamba (input-dependent)
+      Low SNR  (σ≈0): fixed dynamics  = LTI-SSM ≈ learned causal convolution
+
+    Universal principle: "Selectivity should be inversely proportional to noise."
+
+    LTI-SSM with fixed A,B,C is mathematically a causal IIR filter (= learned
+    convolution), providing the same structural noise invariance as CNN's
+    fixed kernels. SM-SSM smoothly interpolates between selective (Mamba)
+    and fixed (CNN-like) dynamics based on estimated SNR.
+
+    Extra parameters per block: 2·d_state + 3
+      d_state=5: +13 params/block, +26 total (0.35% of 7,402)
+    """
+
+    def __init__(self, d_inner, d_state, n_mels=40, mode='full'):
+        super().__init__(d_inner, d_state, n_mels, mode)
+
+        # Fixed (LTI) dynamics: learned "CNN-like" fallback
+        # These parameters provide noise-immune baseline dynamics.
+        # Initialized to zero → initial behavior identical to SA-SSM v2
+        # (since sigma=1 at clean, fixed path contributes nothing at start).
+        self.dt_base = nn.Parameter(torch.zeros(1))
+        self.B_base = nn.Parameter(torch.zeros(d_state))
+        self.C_base = nn.Parameter(torch.zeros(d_state))
+
+        # Selectivity gate: controls selective↔fixed interpolation
+        # sel_scale=5.0: moderately sharp transition
+        # sel_bias=-1.0: transition centered at SNR ≈ 0.2 (after Michaelis-Menten)
+        self.sel_scale = nn.Parameter(torch.tensor(5.0))
+        self.sel_bias = nn.Parameter(torch.tensor(-1.0))
+
+    def forward(self, x, snr_mel, pcen_gate=None):
+        """
+        Args:
+            x: (B, L, d_inner) - feature sequence
+            snr_mel: (B, L, n_mels) - per-mel-band SNR
+            pcen_gate: (B, L) optional - per-frame PCEN routing score
+        Returns:
+            y: (B, L, d_inner)
+        """
+        Bs, L, D = x.shape
+        N = self.d_state
+
+        # ================================================================
+        # 1. Selective parameters (from potentially noisy input x)
+        # ================================================================
+        x_proj = self.x_proj(x)  # (B, L, 2N+1)
+        dt_selective = x_proj[..., :1]
+        B_selective = x_proj[..., 1:N + 1]
+        C_selective = x_proj[..., N + 1:]
+
+        # ================================================================
+        # 2. SNR-based selectivity gate σ
+        # ================================================================
+        # Michaelis-Menten re-normalization (from SA-SSM v2)
+        snr_internal = snr_mel / (snr_mel + self.snr_half_sat)
+        snr_mean = snr_internal.mean(dim=-1, keepdim=True)  # (B, L, 1)
+
+        sigma = torch.sigmoid(self.sel_scale * snr_mean + self.sel_bias)
+        # σ ≈ 1 at high SNR → use selective (Mamba, input-dependent)
+        # σ ≈ 0 at low SNR  → use fixed (LTI ≈ learned convolution)
+
+        # ================================================================
+        # 3. Selectivity Modulation: blend selective ↔ fixed
+        # ================================================================
+        # At low SNR, noisy x_proj outputs are replaced by learned fixed params
+        # → eliminates multiplicative noise propagation
+        dt_raw = sigma * dt_selective + (1.0 - sigma) * self.dt_base
+        B_param = sigma * B_selective + (1.0 - sigma) * self.B_base
+        C_param = sigma * C_selective + (1.0 - sigma) * self.C_base
+
+        # ================================================================
+        # 4. SNR modulation (existing SA-SSM v2 mechanisms, unchanged)
+        # ================================================================
+        snr_mod = self.snr_proj(snr_mel)  # (B, L, N+1)
+
+        if self.mode in ('full', 'dt_only'):
+            dt_snr_shift = snr_mod[..., :1]
+        else:
+            dt_snr_shift = torch.zeros_like(dt_raw)
+
+        if self.mode in ('full', 'b_only'):
+            B_gate_raw = torch.sigmoid(snr_mod[..., 1:])
+            B_gate = B_gate_raw * (1.0 - self.bgate_floor) + self.bgate_floor
+        else:
+            B_gate = torch.ones_like(B_param)
+
+        # Adaptive delta floor
+        adaptive_floor = self.delta_floor_min + (
+            self.delta_floor_max - self.delta_floor_min
+        ) * snr_mean
+
+        # PCEN gate conditioning (v2)
+        if pcen_gate is not None:
+            pg = pcen_gate.detach().unsqueeze(-1)
+            gate_modulation = 1.0 - 0.4 * pg
+            adaptive_floor = adaptive_floor * gate_modulation
+
+        delta = F.softplus(
+            self.dt_proj(dt_raw + dt_snr_shift)
+        ) + adaptive_floor
+
+        # SNR-gated B
+        if self.mode != 'standard':
+            B_param = B_param * (1.0 - self.alpha + self.alpha * B_gate)
+
+        # ================================================================
+        # 5. SSM state update (identical to SA-SSM v2)
+        # ================================================================
+        A = -torch.exp(self.A_log)
+        dA = torch.exp(A.unsqueeze(0).unsqueeze(0) * delta.unsqueeze(-1))
+        dB = delta.unsqueeze(-1) * B_param.unsqueeze(2)
+        dBx = dB * x.unsqueeze(-1)
+
+        adaptive_eps = self.epsilon_max - (
+            self.epsilon_max - self.epsilon_min
+        ) * snr_mean
+
+        y = torch.zeros_like(x)
+        h = torch.zeros(Bs, D, N, device=x.device)
+
+        for t in range(L):
+            h = (dA[:, t] * h + dBx[:, t] +
+                 adaptive_eps[:, t].unsqueeze(-1) * x[:, t].unsqueeze(-1))
+            y[:, t] = (h * C_param[:, t].unsqueeze(1)).sum(-1) + self.D * x[:, t]
+
+        return y
+
+
+# ============================================================================
 # Frequency-Interleaved Mamba (FI-Mamba)
 # ============================================================================
 
@@ -1948,11 +2096,12 @@ class NanoMambaBlock(nn.Module):
     """Single NanoMamba block: LayerNorm -> in_proj -> DWConv -> SA-SSM -> Gate -> out_proj + Residual."""
 
     def __init__(self, d_model, d_state=4, d_conv=3, expand=1.5, n_mels=40,
-                 ssm_mode='full', use_ssm_v2=False):
+                 ssm_mode='full', use_ssm_v2=False, use_sm_ssm=False):
         super().__init__()
         self.d_model = d_model
         self.d_inner = int(d_model * expand)
         self.use_ssm_v2 = use_ssm_v2
+        self.use_sm_ssm = use_sm_ssm
 
         self.norm = nn.LayerNorm(d_model)
 
@@ -1965,8 +2114,16 @@ class NanoMambaBlock(nn.Module):
             kernel_size=d_conv, padding=d_conv - 1,
             groups=self.d_inner)
 
-        # Spectral-Aware SSM (v1 or v2)
-        SSMClass = SpectralAwareSSM_v2 if use_ssm_v2 else SpectralAwareSSM
+        # SSM variant selection:
+        # SM-SSM: Selectivity-Modulated (CNN↔Mamba blend based on SNR)
+        # SA-SSM v2: SNR-aware with Michaelis-Menten + PCEN gate
+        # SA-SSM v1: Basic SNR modulation
+        if use_sm_ssm:
+            SSMClass = SelectivityModulatedSSM
+        elif use_ssm_v2:
+            SSMClass = SpectralAwareSSM_v2
+        else:
+            SSMClass = SpectralAwareSSM
         self.sa_ssm = SSMClass(
             d_inner=self.d_inner,
             d_state=d_state,
@@ -1998,8 +2155,8 @@ class NanoMambaBlock(nn.Module):
         x_branch = x_branch.transpose(1, 2)  # (B, L, d_inner)
         x_branch = F.silu(x_branch)
 
-        # Spectral-Aware SSM (v2 receives pcen_gate for noise-type conditioning)
-        if self.use_ssm_v2 and pcen_gate is not None:
+        # Spectral-Aware SSM (v2/SM-SSM receive pcen_gate for noise-type conditioning)
+        if (self.use_ssm_v2 or self.use_sm_ssm) and pcen_gate is not None:
             y = self.sa_ssm(x_branch, snr_mel, pcen_gate=pcen_gate)
         else:
             y = self.sa_ssm(x_branch, snr_mel)
@@ -2049,9 +2206,11 @@ class NanoMamba(nn.Module):
                  use_multi_pcen=False, n_pcen_experts=3,
                  use_dual_pcen_v2=False, use_multi_pcen_v2=False,
                  use_ssm_v2=False,
+                 use_sm_ssm=False,
                  use_spectral_enhancer=False,
                  use_learnable_enhancer=False,
                  use_spectral_block=False, d_state_f=3,
+                 use_spec_augment=False,
                  weight_sharing=False, n_repeats=3):
         """
         Args:
@@ -2122,9 +2281,11 @@ class NanoMamba(nn.Module):
         self.use_multi_pcen = use_multi_pcen or use_multi_pcen_v2
         self.use_multi_pcen_v2 = use_multi_pcen_v2
         self.use_ssm_v2 = use_ssm_v2
+        self.use_sm_ssm = use_sm_ssm
         self.use_spectral_enhancer = use_spectral_enhancer
         self.use_learnable_enhancer = use_learnable_enhancer
         self.use_spectral_block = use_spectral_block
+        self.use_spec_augment = use_spec_augment
 
         # Mutual exclusion: waveform-domain vs magnitude-domain enhancer
         assert not (use_spectral_enhancer and use_learnable_enhancer), \
@@ -2197,7 +2358,7 @@ class NanoMamba(nn.Module):
         # 4. Patch projection: mel bands -> d_model
         self.patch_proj = nn.Linear(n_mels, d_model)
 
-        # 5. SA-SSM Blocks (v1 or v2)
+        # 5. SA-SSM Blocks (v1, v2, or SM-SSM)
         self.weight_sharing = weight_sharing
         if weight_sharing:
             # Single shared block, repeated n_repeats times
@@ -2209,7 +2370,8 @@ class NanoMamba(nn.Module):
                 expand=expand,
                 n_mels=n_mels,
                 ssm_mode=ssm_mode,
-                use_ssm_v2=use_ssm_v2)
+                use_ssm_v2=use_ssm_v2,
+                use_sm_ssm=use_sm_ssm)
             self.blocks = nn.ModuleList([shared_block])
             self.n_repeats = n_repeats
         else:
@@ -2221,7 +2383,8 @@ class NanoMamba(nn.Module):
                     expand=expand,
                     n_mels=n_mels,
                     ssm_mode=ssm_mode,
-                    use_ssm_v2=use_ssm_v2)
+                    use_ssm_v2=use_ssm_v2,
+                    use_sm_ssm=use_sm_ssm)
                 for _ in range(n_layers)
             ])
             self.n_repeats = n_layers
@@ -2327,7 +2490,41 @@ class NanoMamba(nn.Module):
         if self.use_spectral_block:
             mel = self.spectral_block(mel)  # (B, n_mels, T) → (B, n_mels, T)
 
+        # [SpecAugment] Frequency + time masking (training only, 0 params)
+        # Masks random freq bands and time frames to improve generalization.
+        # Conservative params for tiny models: freq_mask=5, time_mask=10.
+        if self.training and self.use_spec_augment:
+            mel = self._spec_augment(mel)
+
         return mel, snr_mel
+
+    def _spec_augment(self, mel, n_freq_masks=2, freq_mask_param=5,
+                      n_time_masks=2, time_mask_param=10):
+        """SpecAugment: frequency & time masking on mel spectrogram.
+
+        Applied during training only. Masks random contiguous bands in
+        frequency and time, forcing the model to be robust to partial
+        information loss. Universal technique for all audio models.
+
+        Args:
+            mel: (B, n_mels, T) normalized mel features
+        Returns:
+            mel: (B, n_mels, T) with random masks applied
+        """
+        B, F, T = mel.shape
+        mel = mel.clone()
+
+        for _ in range(n_freq_masks):
+            f = random.randint(0, freq_mask_param)
+            f0 = random.randint(0, max(0, F - f))
+            mel[:, f0:f0 + f, :] = 0.0
+
+        for _ in range(n_time_masks):
+            t = random.randint(0, min(time_mask_param, T))
+            t0 = random.randint(0, max(0, T - t))
+            mel[:, :, t0:t0 + t] = 0.0
+
+        return mel
 
     def get_routing_gate(self, per_frame=False):
         """Return last routing gate values.
@@ -2965,6 +3162,42 @@ def create_nanomamba_tiny_dualpcen_v2_ssmv2_fi(n_classes=12):
 
 
 # ============================================================================
+# SM-SSM: Selectivity-Modulated SA-SSM (CNN noise immunity + Mamba adaptivity)
+# ============================================================================
+
+def create_nanomamba_matched_dualpcen_v2_smssm(n_classes=12):
+    """NanoMamba-Matched-SM: DualPCEN v2 + Selectivity-Modulated SA-SSM.
+
+    Novel architecture: SM-SSM smoothly interpolates between selective
+    (Mamba, input-dependent) and fixed (LTI ≈ learned convolution) dynamics
+    based on estimated SNR.
+
+    At high SNR: fully selective → Standard Mamba adaptivity
+    At low SNR:  fixed dynamics  → CNN-like noise immunity
+
+    Key insight: Selective SSM creates multiplicative noise through
+    input-dependent Δ,B,C. Fixed LTI-SSM creates only additive noise
+    (like CNN's fixed filters). SM-SSM bridges both paradigms.
+
+    ~7,428 params (+26 from SM, 0.35% overhead).
+    """
+    return NanoMamba(
+        n_mels=40, n_classes=n_classes,
+        d_model=21, d_state=5, d_conv=3, expand=1.5,
+        n_layers=2, use_dual_pcen_v2=True,
+        use_ssm_v2=True, use_sm_ssm=True)
+
+
+def create_nanomamba_tiny_dualpcen_v2_smssm(n_classes=12):
+    """NanoMamba-Tiny-SM: DualPCEN v2 + SM-SSM. ~4,979 params."""
+    return NanoMamba(
+        n_mels=40, n_classes=n_classes,
+        d_model=16, d_state=4, d_conv=3, expand=1.5,
+        n_layers=2, use_dual_pcen_v2=True,
+        use_ssm_v2=True, use_sm_ssm=True)
+
+
+# ============================================================================
 # Ablation Factory Functions
 # ============================================================================
 
@@ -3023,6 +3256,9 @@ if __name__ == '__main__':
         'NanoMamba-Tiny-PCEN': create_nanomamba_tiny_pcen,
         'NanoMamba-Small-PCEN': create_nanomamba_small_pcen,
         'NanoMamba-Tiny-PCEN-TC': create_nanomamba_tiny_pcen_tc,
+        # SM-SSM: Selectivity-Modulated SA-SSM (CNN↔Mamba blend based on SNR)
+        'NanoMamba-Matched-SM': create_nanomamba_matched_dualpcen_v2_smssm,
+        'NanoMamba-Tiny-SM': create_nanomamba_tiny_dualpcen_v2_smssm,
     }
 
     print(f"\n  {'Model':<22} | {'Params':>8} | {'FP32 KB':>8} | {'INT8 KB':>8} | Output")

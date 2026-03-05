@@ -92,6 +92,9 @@ try:
         # FI add-on: SpectralMambaBlock on existing NanoMamba architectures
         create_nanomamba_matched_dualpcen_v2_ssmv2_fi,
         create_nanomamba_tiny_dualpcen_v2_ssmv2_fi,
+        # SM-SSM: Selectivity-Modulated SA-SSM (CNN↔Mamba blend based on SNR)
+        create_nanomamba_matched_dualpcen_v2_smssm,
+        create_nanomamba_tiny_dualpcen_v2_smssm,
         # FI-Mamba: Frequency-Interleaved Mamba (spectral + temporal SSM)
         create_fimamba_matched,
         create_fimamba_small,
@@ -321,6 +324,55 @@ class SpeechCommandsDataset(Dataset):
 
 
 # ============================================================================
+# Model EMA (Exponential Moving Average)
+# ============================================================================
+
+class ModelEMA:
+    """Exponential Moving Average of model parameters.
+
+    Maintains shadow weights = running average of training weights.
+    At eval, shadow weights provide better generalization (~0.3-0.5%p).
+
+    Usage:
+        ema = ModelEMA(model, decay=0.999)
+        # After each optimizer.step():
+        ema.update(model)
+        # For validation:
+        ema.apply_shadow(model)
+        val_acc = evaluate(model, val_loader, device)
+        ema.restore(model)
+    """
+
+    def __init__(self, model, decay=0.999):
+        self.decay = decay
+        self.shadow = {}
+        self.backup = {}
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name] = param.data.clone()
+
+    @torch.no_grad()
+    def update(self, model):
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.shadow:
+                self.shadow[name].mul_(self.decay).add_(
+                    param.data, alpha=1.0 - self.decay)
+
+    def apply_shadow(self, model):
+        self.backup = {}
+        for name, param in model.named_parameters():
+            if param.requires_grad and name in self.shadow:
+                self.backup[name] = param.data.clone()
+                param.data.copy_(self.shadow[name])
+
+    def restore(self, model):
+        for name, param in model.named_parameters():
+            if name in self.backup:
+                param.data.copy_(self.backup[name])
+        self.backup = {}
+
+
+# ============================================================================
 # Training Functions
 # ============================================================================
 
@@ -329,7 +381,8 @@ def train_one_epoch(model, train_loader, optimizer, scheduler, device,
                     noise_aug=False, noise_ratio=0.5, is_cnn=False,
                     dataset_audios=None, mel_fb=None,
                     n_fft=512, hop_length=160, n_mels=40,
-                    total_epochs=30, noise_curriculum_v2=False):
+                    total_epochs=30, noise_curriculum_v2=False,
+                    ema=None):
     """Train one epoch with Per-Sample Multi-Condition Noise Augmentation.
 
     [KEY INSIGHT] Why noise-aug helps NanoMamba MORE than CNN:
@@ -549,6 +602,10 @@ def train_one_epoch(model, train_loader, optimizer, scheduler, device,
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
+
+        # EMA update (per-step for smooth averaging)
+        if ema is not None:
+            ema.update(model)
 
         if scheduler is not None:
             scheduler.step()
@@ -2121,6 +2178,9 @@ MODEL_REGISTRY = {
     # Learnable Spectral Enhancement: differentiable Wiener gain (516 extra params)
     'NanoMamba-Tiny-LSE': create_nanomamba_tiny_dualpcen_v2_ssmv2_lse,
     'NanoMamba-Matched-LSE': create_nanomamba_matched_dualpcen_v2_ssmv2_lse,
+    # SM-SSM: Selectivity-Modulated SA-SSM (CNN↔Mamba blend based on SNR, +26/+22 params)
+    'NanoMamba-Matched-SM': create_nanomamba_matched_dualpcen_v2_smssm,
+    'NanoMamba-Tiny-SM': create_nanomamba_tiny_dualpcen_v2_smssm,
     # FI add-on: SpectralMambaBlock on existing NanoMamba (freq-axis SSM scanning)
     'NanoMamba-Matched-FI': create_nanomamba_matched_dualpcen_v2_ssmv2_fi,
     'NanoMamba-Tiny-FI': create_nanomamba_tiny_dualpcen_v2_ssmv2_fi,
@@ -2189,7 +2249,8 @@ def _adjust_bn_momentum(model, momentum):
 
 def train_model(model, model_name, train_dataset, val_dataset,
                 checkpoint_dir, device, epochs=30, batch_size=128, lr=3e-3,
-                noise_aug=False, noise_ratio=0.5, noise_curriculum_v2=False):
+                noise_aug=False, noise_ratio=0.5, noise_curriculum_v2=False,
+                use_ema=False, ema_decay=0.999):
     """Full training loop with Per-Sample Multi-Condition Noise Augmentation.
 
     [NOVEL] Per-Sample Multi-Condition Training reveals structural differences:
@@ -2268,6 +2329,11 @@ def train_model(model, model_name, train_dataset, val_dataset,
     if noise_aug and hasattr(train_dataset, '_cache_audio'):
         dataset_audios = train_dataset._cache_audio[:500]
 
+    # EMA: Exponential Moving Average for better generalization
+    ema = ModelEMA(model, decay=ema_decay) if use_ema else None
+    if use_ema:
+        print(f"    EMA enabled (decay={ema_decay})")
+
     best_acc = 0
     best_epoch = 0
     model_dir = Path(checkpoint_dir) / model_name.replace(' ', '_')
@@ -2291,9 +2357,14 @@ def train_model(model, model_name, train_dataset, val_dataset,
             noise_aug=noise_aug, noise_ratio=noise_ratio,
             is_cnn=is_cnn, dataset_audios=dataset_audios,
             mel_fb=mel_fb, total_epochs=epochs,
-            noise_curriculum_v2=noise_curriculum_v2)
+            noise_curriculum_v2=noise_curriculum_v2,
+            ema=ema)
 
         # Evaluate on CLEAN val set (always clean, fair comparison)
+        # Use EMA weights for evaluation if enabled
+        if ema is not None:
+            ema.apply_shadow(model)
+
         if is_cnn:
             val_acc = _evaluate_cnn(model, val_loader, device)
         else:
@@ -2315,22 +2386,33 @@ def train_model(model, model_name, train_dataset, val_dataset,
         if val_acc > best_acc:
             best_acc = val_acc
             best_epoch = epoch + 1
+            # Save EMA weights if enabled (already applied above)
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'epoch': epoch,
                 'val_acc': val_acc,
                 'model_name': model_name,
                 'noise_aug': noise_aug,
+                'use_ema': use_ema,
             }, model_dir / 'best.pt')
 
-    # Save final
+        # Restore original weights for continued training
+        if ema is not None:
+            ema.restore(model)
+
+    # Save final (use EMA weights if enabled)
+    if ema is not None:
+        ema.apply_shadow(model)
     torch.save({
         'model_state_dict': model.state_dict(),
         'epoch': epochs,
         'val_acc': val_acc,
         'model_name': model_name,
         'noise_aug': noise_aug,
+        'use_ema': use_ema,
     }, model_dir / 'final.pt')
+    if ema is not None:
+        ema.restore(model)
 
     with open(model_dir / 'history.json', 'w') as f:
         json.dump(history, f, indent=2)
@@ -2432,6 +2514,15 @@ def main():
     parser.add_argument('--calibrate_continuous', action='store_true',
                         help='Use continuous calibration interpolation instead of '
                              'discrete 4-profile system. Smooth SNR-to-parameter curves.')
+    # Training enhancements (universal, works with all models)
+    parser.add_argument('--spec_augment', action='store_true',
+                        help='Enable SpecAugment (freq+time masking). '
+                             'Improves generalization, 0 extra params.')
+    parser.add_argument('--use_ema', action='store_true',
+                        help='Use Exponential Moving Average of model weights. '
+                             'Smooths training, better generalization.')
+    parser.add_argument('--ema_decay', type=float, default=0.999,
+                        help='EMA decay rate (default: 0.999)')
     args = parser.parse_args()
 
     # Seed
@@ -2475,9 +2566,14 @@ def main():
     models = {}
     for name in model_names:
         model = create_model(name)
+        # Enable SpecAugment if requested (works with any NanoMamba model)
+        if args.spec_augment and hasattr(model, 'use_spec_augment'):
+            model.use_spec_augment = True
         params = sum(p.numel() for p in model.parameters())
         fp32_kb = params * 4 / 1024
-        print(f"  {name}: {params:,} params ({fp32_kb:.1f} KB FP32)")
+        aug_info = " +SpecAug" if args.spec_augment and hasattr(model, 'use_spec_augment') else ""
+        ema_info = " +EMA" if args.use_ema else ""
+        print(f"  {name}: {params:,} params ({fp32_kb:.1f} KB FP32){aug_info}{ema_info}")
         models[name] = model
 
     # ===== 3. Train (or load) =====
@@ -2506,7 +2602,8 @@ def main():
                 args.checkpoint_dir, device,
                 epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
                 noise_aug=args.noise_aug, noise_ratio=args.noise_ratio,
-                noise_curriculum_v2=args.noise_curriculum_v2)
+                noise_curriculum_v2=args.noise_curriculum_v2,
+                use_ema=args.use_ema, ema_decay=args.ema_decay)
 
         trained_models[model_name] = model
 
