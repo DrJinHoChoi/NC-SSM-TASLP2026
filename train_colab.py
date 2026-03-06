@@ -104,6 +104,8 @@ try:
         # NanoApple: Frequency-Aware SSM (CNN freq processing + SSM streaming)
         create_nanoapple,
         create_nanoapple_v2,
+        # NanoApple-v3: DualPCEN v2 + BC-ResNet backbone
+        create_nanoapple_v3,
     )
     print("  [OK] nanomamba.py loaded successfully")
 except ImportError:
@@ -2209,6 +2211,8 @@ MODEL_REGISTRY = {
     # NanoApple: Frequency-Aware SSM (CNN freq processing + SSM streaming)
     'NanoApple': create_nanoapple,
     'NanoApple-v2': create_nanoapple_v2,
+    # NanoApple-v3: DualPCEN v2 + BC-ResNet backbone + SS Training
+    'NanoApple-v3': create_nanoapple_v3,
     'DS-CNN-S': lambda n=12: DSCNN_S(n_classes=n),
     'BC-ResNet-1': lambda n=12: BCResNet(n_classes=n, scale=1),
 }
