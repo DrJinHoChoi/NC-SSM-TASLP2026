@@ -261,7 +261,11 @@ class PCEN(nn.Module):
         smoothed = torch.cat(smoothed_frames, dim=-1)  # (B, M, T)
 
         # AGC + dynamic range compression
+        # NaN safety: clamp smoothed to prevent extreme gain when smoothed≈0
+        smoothed = smoothed.clamp(min=1e-5)
         gain = (self.eps + smoothed) ** (-alpha)
+        # NaN safety: clamp gain to prevent overflow in mel * gain
+        gain = gain.clamp(max=1e5)
         pcen_out = (mel * gain + delta) ** r - delta ** r
 
         return pcen_out
@@ -508,6 +512,8 @@ class DualPCEN_v2(nn.Module):
         # gate: (B, 1, T) → (B, T) for indexing inside SSM scan loop
         self._last_gate_per_frame = gate.squeeze(1)  # (B, T)
 
+        # NaN safety: ensure pcen_out has no NaN (can propagate from gain explosion)
+        pcen_out = torch.nan_to_num(pcen_out, nan=0.0)
         return pcen_out
 
 
@@ -1309,7 +1315,7 @@ class SpectralAwareSSM_v2(nn.Module):
 
         delta = F.softplus(
             self.dt_proj(dt_raw + dt_snr_shift)
-        ) + adaptive_floor
+        ).clamp(max=1.0) + adaptive_floor  # clamp softplus to prevent delta explosion
 
         # SNR-gated B
         if self.mode != 'standard':
@@ -1335,8 +1341,12 @@ class SpectralAwareSSM_v2(nn.Module):
         for t in range(L):
             h = (dA[:, t] * h + dBx[:, t] +
                  adaptive_eps[:, t].unsqueeze(-1) * x[:, t].unsqueeze(-1))
+            # NaN safety: clamp hidden state to prevent accumulation overflow
+            h = h.clamp(-1e4, 1e4)
             y[:, t] = (h * C_param[:, t].unsqueeze(1)).sum(-1) + self.D * x[:, t]
 
+        # NaN safety: replace any residual NaN in output
+        y = torch.nan_to_num(y, nan=0.0, posinf=1e4, neginf=-1e4)
         return y
 
 
@@ -1447,7 +1457,10 @@ class SelectivityModulatedSSM(SpectralAwareSSM_v2):
         # Non-stationary noise → pcen_gate high → reduce σ more aggressively
         if pcen_gate is not None:
             pg = pcen_gate.detach().unsqueeze(-1)  # (B, L, 1)
-            pcen_mod = 1.0 - self.sigma_pcen_mod * pg
+            # Safety: NaN guard on pcen_gate + clamp sigma_pcen_mod to [0, 1]
+            pg = torch.nan_to_num(pg, nan=0.0)
+            mod_clamped = self.sigma_pcen_mod.clamp(0.0, 1.0)
+            pcen_mod = 1.0 - mod_clamped * pg
             sigma_dt = sigma_dt * pcen_mod
             sigma_BC = sigma_BC * pcen_mod
 
@@ -1482,6 +1495,7 @@ class SelectivityModulatedSSM(SpectralAwareSSM_v2):
         # PCEN gate conditioning on adaptive floor (v2, unchanged)
         if pcen_gate is not None:
             pg = pcen_gate.detach().unsqueeze(-1)
+            pg = torch.nan_to_num(pg, nan=0.0)  # NaN safety
             gate_modulation = 1.0 - 0.4 * pg
             adaptive_floor = adaptive_floor * gate_modulation
 
@@ -1511,8 +1525,12 @@ class SelectivityModulatedSSM(SpectralAwareSSM_v2):
         for t in range(L):
             h = (dA[:, t] * h + dBx[:, t] +
                  adaptive_eps[:, t].unsqueeze(-1) * x[:, t].unsqueeze(-1))
+            # NaN safety: clamp hidden state to prevent accumulation overflow
+            h = h.clamp(-1e4, 1e4)
             y[:, t] = (h * C_param[:, t].unsqueeze(1)).sum(-1) + self.D * x[:, t]
 
+        # NaN safety: replace any residual NaN in output
+        y = torch.nan_to_num(y, nan=0.0, posinf=1e4, neginf=-1e4)
         return y
 
 
@@ -1636,7 +1654,11 @@ class NoiseCondSMSSM(SelectivityModulatedSSM):
         # PCEN gate modulation on σ (unchanged from SM-SSM)
         if pcen_gate is not None:
             pg = pcen_gate.detach().unsqueeze(-1)  # (B, L, 1)
-            pcen_mod = 1.0 - self.sigma_pcen_mod * pg
+            # Safety: NaN guard on pcen_gate (DualPCEN can produce NaN in edge cases)
+            pg = torch.nan_to_num(pg, nan=0.0)
+            # Clamp sigma_pcen_mod to [0, 1] to prevent pcen_mod from going negative
+            mod_clamped = self.sigma_pcen_mod.clamp(0.0, 1.0)
+            pcen_mod = 1.0 - mod_clamped * pg
             sigma_dt = sigma_dt * pcen_mod
             sigma_BC = sigma_BC * pcen_mod
 
@@ -1654,7 +1676,7 @@ class NoiseCondSMSSM(SelectivityModulatedSSM):
         broadband_score = (1.0 - spectral_var).detach()  # conditioning signal, no grad needed
 
         B_base_mod = self.B_base * (
-            1.0 + self.B_sf_scale * broadband_score)  # (B, L, N) via broadcast
+            1.0 + self.B_sf_scale.clamp(-5.0, 5.0) * broadband_score)  # (B, L, N) via broadcast
 
         # Blend selective ↔ fixed (with modulated B_base)
         dt_raw = sigma_dt * dt_selective + (1.0 - sigma_dt) * self.dt_base
@@ -1685,6 +1707,7 @@ class NoiseCondSMSSM(SelectivityModulatedSSM):
         # PCEN gate conditioning on adaptive floor
         if pcen_gate is not None:
             pg = pcen_gate.detach().unsqueeze(-1)
+            pg = torch.nan_to_num(pg, nan=0.0)  # NaN safety
             gate_modulation = 1.0 - 0.4 * pg
 
             # ★ NC-2: Stationarity-conditioned Δ floor
@@ -1718,8 +1741,12 @@ class NoiseCondSMSSM(SelectivityModulatedSSM):
         for t in range(L):
             h = (dA[:, t] * h + dBx[:, t] +
                  adaptive_eps[:, t].unsqueeze(-1) * x[:, t].unsqueeze(-1))
+            # NaN safety: clamp hidden state to prevent accumulation overflow
+            h = h.clamp(-1e4, 1e4)
             y[:, t] = (h * C_param[:, t].unsqueeze(1)).sum(-1) + self.D * x[:, t]
 
+        # NaN safety: replace any residual NaN in output
+        y = torch.nan_to_num(y, nan=0.0, posinf=1e4, neginf=-1e4)
         return y
 
 
