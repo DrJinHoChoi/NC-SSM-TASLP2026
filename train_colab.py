@@ -635,20 +635,23 @@ def train_one_epoch(model, train_loader, optimizer, scheduler, device,
         optimizer.zero_grad()
         loss.backward()
 
-        # NaN safety: check gradients before stepping
-        grad_nan = False
+        # Gradient sanitization: replace Inf/NaN with 0, then clip
+        # This is standard practice for recurrent models (SSM/RNN)
+        # Previously: detect NaN/Inf → skip batch → clip never runs → 100% skip
+        # Now: sanitize → clip → step → model always learns
+        grad_has_inf = False
         for p in model.parameters():
-            if p.grad is not None and (torch.isnan(p.grad).any() or torch.isinf(p.grad).any()):
-                grad_nan = True
-                break
-        if grad_nan:
+            if p.grad is not None:
+                if torch.isnan(p.grad).any() or torch.isinf(p.grad).any():
+                    grad_has_inf = True
+                    p.grad = torch.nan_to_num(p.grad, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if grad_has_inf:
             nan_skip_count = getattr(train_one_epoch, '_nan_skips', 0) + 1
             train_one_epoch._nan_skips = nan_skip_count
-            if nan_skip_count <= 5:
-                print(f"    ⚠ NaN gradient at batch {batch_idx+1}, "
-                      f"skipping (total skipped: {nan_skip_count})", flush=True)
-            optimizer.zero_grad()
-            continue
+            if nan_skip_count <= 10:
+                print(f"    ⓘ Inf/NaN grad sanitized at batch {batch_idx+1} "
+                      f"(total: {nan_skip_count})", flush=True)
 
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()

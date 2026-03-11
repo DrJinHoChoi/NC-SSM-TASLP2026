@@ -346,19 +346,20 @@ class DualPCEN(nn.Module):
 
         # Spectral Flatness — per-frame noise stationarity measure (0 params)
         # SF = geometric_mean(mel) / arithmetic_mean(mel)
-        # Computed across mel bands for each time frame
-        log_mel = torch.log(mel_linear + 1e-8)                        # (B, M, T)
-        geo_mean = torch.exp(log_mel.mean(dim=1, keepdim=True))       # (B, 1, T)
-        arith_mean = mel_linear.mean(dim=1, keepdim=True) + 1e-8      # (B, 1, T)
-        sf = (geo_mean / arith_mean).clamp(0, 1)                      # (B, 1, T)
+        # Gradient-safe: clamp mel to 1e-4 (max grad 1e4) vs 1e-8 (max grad 1e8)
+        mel_safe = mel_linear.clamp(min=1e-4)
+        log_mel = torch.log(mel_safe)                                  # (B, M, T)
+        geo_mean = torch.exp(log_mel.mean(dim=1, keepdim=True))        # (B, 1, T)
+        arith_mean = mel_safe.mean(dim=1, keepdim=True)                # (B, 1, T)
+        sf = (geo_mean / arith_mean).clamp(0, 1)                       # (B, 1, T)
 
         # [NOVEL] Spectral Tilt: low-frequency energy concentration (0 params)
         # Distinguishes colored stationary noise (pink: tilt≈0.85) from
         # non-stationary noise (babble: tilt≈0.55). SF alone misroutes pink
         # noise (SF=0.3, peaked spectrum) to babble expert — tilt corrects this.
         n_mels = mel_linear.size(1)
-        low_energy = mel_linear[:, :n_mels // 3, :].mean(dim=1, keepdim=True)
-        high_energy = mel_linear[:, 2 * n_mels // 3:, :].mean(dim=1, keepdim=True)
+        low_energy = mel_safe[:, :n_mels // 3, :].mean(dim=1, keepdim=True)
+        high_energy = mel_safe[:, 2 * n_mels // 3:, :].mean(dim=1, keepdim=True)
         spectral_tilt = (low_energy / (low_energy + high_energy + 1e-8)).clamp(0, 1)
 
         # [NOVEL] Multi-dimensional routing: SF + Tilt correction
@@ -469,9 +470,11 @@ class DualPCEN_v2(nn.Module):
         out_stat = self.pcen_stat(mel_linear, snr_mel=snr_cond)
 
         # === Spectral Flatness (0 params) ===
-        log_mel = torch.log(mel_linear + 1e-8)
-        geo_mean = torch.exp(log_mel.mean(dim=1, keepdim=True))
-        arith_mean = mel_linear.mean(dim=1, keepdim=True) + 1e-8
+        # Gradient-safe: clamp mel to 1e-4 (max grad 1e4) vs 1e-8 (max grad 1e8 → FP32 Inf)
+        mel_safe = mel_linear.clamp(min=1e-4)
+        log_mel = torch.log(mel_safe)                                    # (B, M, T)
+        geo_mean = torch.exp(log_mel.mean(dim=1, keepdim=True))          # (B, 1, T)
+        arith_mean = mel_safe.mean(dim=1, keepdim=True)                  # (B, 1, T)
         sf_raw = (geo_mean / arith_mean).clamp(0, 1)  # (B, 1, T)
 
         # [v2] Temporal smoothing of SF (0 params)
@@ -479,8 +482,8 @@ class DualPCEN_v2(nn.Module):
 
         # === Spectral Tilt (0 params) ===
         n_mels = mel_linear.size(1)
-        low_energy = mel_linear[:, :n_mels // 3, :].mean(dim=1, keepdim=True)
-        high_energy = mel_linear[:, 2 * n_mels // 3:, :].mean(dim=1, keepdim=True)
+        low_energy = mel_safe[:, :n_mels // 3, :].mean(dim=1, keepdim=True)
+        high_energy = mel_safe[:, 2 * n_mels // 3:, :].mean(dim=1, keepdim=True)
         spectral_tilt = (low_energy / (low_energy + high_energy + 1e-8)).clamp(0, 1)
 
         # SF + Tilt correction (same as DualPCEN)
@@ -489,11 +492,12 @@ class DualPCEN_v2(nn.Module):
         # === [v2] TMI: Temporal Modulation Index (0 params) ===
         # Coefficient of variation of frame energy over causal window.
         # Stationary noise → low TMI, non-stationary → high TMI.
-        frame_energy = mel_linear.mean(dim=1, keepdim=True)  # (B, 1, T)
+        frame_energy = mel_safe.mean(dim=1, keepdim=True)  # (B, 1, T)
         ema_E = self._causal_smooth(frame_energy)
         ema_E2 = self._causal_smooth(frame_energy ** 2)
         variance = (ema_E2 - ema_E ** 2).clamp(min=0)
-        tmi = variance.sqrt() / (ema_E.clamp(min=1e-5) + 1e-8)  # CV coefficient; clamp prevents Inf for silence
+        # Gradient-safe: (variance + eps).sqrt() prevents 1/(2*sqrt(0)) = Inf gradient
+        tmi = (variance + 1e-6).sqrt() / (ema_E.clamp(min=1e-5) + 1e-8)
         tmi = self._causal_smooth(tmi.clamp(0, 2.0) / 2.0)  # normalize to [0,1]
 
         # TMI correction: low TMI (temporally stationary) → boost toward stat expert
@@ -605,15 +609,17 @@ class MultiPCEN(nn.Module):
         outputs = [expert(mel_linear) for expert in self.experts]
 
         # === Spectral Flatness (0 params) — same as DualPCEN ===
-        log_mel = torch.log(mel_linear + 1e-8)
+        # Gradient-safe: clamp mel to 1e-4 (max grad 1e4 vs 1e8)
+        mel_safe = mel_linear.clamp(min=1e-4)
+        log_mel = torch.log(mel_safe)
         geo_mean = torch.exp(log_mel.mean(dim=1, keepdim=True))
-        arith_mean = mel_linear.mean(dim=1, keepdim=True) + 1e-8
+        arith_mean = mel_safe.mean(dim=1, keepdim=True)
         sf = (geo_mean / arith_mean).clamp(0, 1)  # (B, 1, T)
 
         # === Spectral Tilt (0 params) — same as DualPCEN ===
         n_mels = mel_linear.size(1)
-        low_energy = mel_linear[:, :n_mels // 3, :].mean(dim=1, keepdim=True)
-        high_energy = mel_linear[:, 2 * n_mels // 3:, :].mean(dim=1, keepdim=True)
+        low_energy = mel_safe[:, :n_mels // 3, :].mean(dim=1, keepdim=True)
+        high_energy = mel_safe[:, 2 * n_mels // 3:, :].mean(dim=1, keepdim=True)
         spectral_tilt = (low_energy / (low_energy + high_energy + 1e-8)).clamp(0, 1)
 
         # === Multi-dimensional routing: SF + Tilt correction ===
@@ -694,37 +700,40 @@ class MultiPCEN_v2(nn.Module):
 
     def forward(self, mel_linear, snr_mel=None):
         # [v2] Pass snr_mel to experts for SNR-adaptive compression exponent
-        outputs = [expert(mel_linear, snr_mel=snr_mel) for expert in self.experts]
+        # .detach(): blocks gradient chain through PCEN IIR loop (same as DualPCEN_v2)
+        snr_cond = snr_mel.detach() if snr_mel is not None else None
+        outputs = [expert(mel_linear, snr_mel=snr_cond) for expert in self.experts]
 
-        # Spectral Flatness + temporal smoothing
-        log_mel = torch.log(mel_linear + 1e-8)
+        # Spectral Flatness + temporal smoothing (gradient-safe)
+        mel_safe = mel_linear.clamp(min=1e-4)
+        log_mel = torch.log(mel_safe)
         geo_mean = torch.exp(log_mel.mean(dim=1, keepdim=True))
-        arith_mean = mel_linear.mean(dim=1, keepdim=True) + 1e-8
+        arith_mean = mel_safe.mean(dim=1, keepdim=True)
         sf_raw = (geo_mean / arith_mean).clamp(0, 1)
         sf = self._causal_smooth(sf_raw)
 
         # Spectral Tilt
         n_mels = mel_linear.size(1)
-        low_energy = mel_linear[:, :n_mels // 3, :].mean(dim=1, keepdim=True)
-        high_energy = mel_linear[:, 2 * n_mels // 3:, :].mean(dim=1, keepdim=True)
+        low_energy = mel_safe[:, :n_mels // 3, :].mean(dim=1, keepdim=True)
+        high_energy = mel_safe[:, 2 * n_mels // 3:, :].mean(dim=1, keepdim=True)
         spectral_tilt = (low_energy / (low_energy + high_energy + 1e-8)).clamp(0, 1)
 
         sf_adjusted = sf + (1.0 - sf) * torch.relu(spectral_tilt - 0.6)
 
-        # [v2] TMI: Temporal Modulation Index
-        frame_energy = mel_linear.mean(dim=1, keepdim=True)
+        # [v2] TMI: Temporal Modulation Index (gradient-safe)
+        frame_energy = mel_safe.mean(dim=1, keepdim=True)
         ema_E = self._causal_smooth(frame_energy)
         ema_E2 = self._causal_smooth(frame_energy ** 2)
         variance = (ema_E2 - ema_E ** 2).clamp(min=0)
-        tmi = variance.sqrt() / (ema_E + 1e-8)
+        tmi = (variance + 1e-6).sqrt() / (ema_E.clamp(min=1e-5) + 1e-8)
         tmi = self._causal_smooth(tmi.clamp(0, 2.0) / 2.0)
 
         tmi_boost = torch.relu(0.5 - tmi) * 0.5
         routing_signal = sf_adjusted + (1.0 - sf_adjusted) * tmi_boost
 
-        # [v2] SNR-conditioned temperatures
+        # [v2] SNR-conditioned temperatures (detach to avoid gradient chain)
         if snr_mel is not None:
-            snr_global = snr_mel.mean(dim=(1, 2)).unsqueeze(-1).unsqueeze(-1)
+            snr_global = snr_mel.detach().mean(dim=(1, 2)).unsqueeze(-1).unsqueeze(-1)
             snr_scale = 1.0 + self.snr_temp_scale * (1.0 - snr_global)
         else:
             snr_scale = 1.0
