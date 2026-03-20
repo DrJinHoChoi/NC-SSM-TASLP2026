@@ -846,6 +846,23 @@ SM-SSM and NC-SSM reduce SSM noise propagation from $O(\sigma_n^6)$ toward $O(\s
 \subsection{Noise Robustness}
 
 Table~\ref{tab:noise_main} reports accuracy under five noise types at all SNR levels.
+Several key observations emerge:
+
+\smallskip\noindent\textbf{1) NC-SSM matches or surpasses BC-ResNet-1 at moderate-to-high SNR.}
+At $\geq 5$\,dB, NC-SSM (7.5K) matches or exceeds BC-ResNet-1 (7.5K) across most noise types despite 11 fewer parameters.
+NC-SSM-Large consistently outperforms BC-ResNet-1 above 0\,dB, with the advantage growing at higher SNR---confirming that SSM structural robustness is most effective when noise is moderate.
+
+\smallskip\noindent\textbf{2) The scaling paradox at extreme noise.}
+At $-15$\,dB white noise, NC-SSM-Large (34.1\%) \emph{drops below} NC-SSM base (50.8\%), despite having 37\% more parameters.
+This counterintuitive result confirms the $O(\sigma_n^6)$ multiplicative noise coupling from Section~\ref{sec:mult_noise}: larger models have more selectivity parameters, amplifying noise more aggressively at extreme SNR.
+NC-SSM-15K and 20K partially recover (44.7\%, 44.0\%) through additional capacity but remain below the base model.
+
+\smallskip\noindent\textbf{3) Babble noise is most favorable for SSMs.}
+NC-SSM-Large (91.3\%) matches BC-ResNet-1 (91.2\%) at babble 0\,dB, and NC-SSM-15K surpasses both CNNs at $-15$\,dB (79.2\% vs.\ 72.0\% BC-ResNet-1).
+Babble noise is non-stationary and speech-like, allowing SSM adaptive dynamics to distinguish speech from noise effectively.
+
+\smallskip\noindent\textbf{4) Graceful scaling.}
+NC-SSM-20K matches DS-CNN-S clean accuracy (96.4\%) and exceeds it in noise robustness at moderate SNR (5--15\,dB) across all five noise types, while using 5.1$\times$ fewer MACs.
 
 \begin{table*}[t]
 \centering
@@ -1176,6 +1193,11 @@ Base SM-SSM     & 0   & 95.1 & 88.5 & 31.1 \\
 \end{tabular}
 \end{table}
 
+Table~\ref{tab:ablation} isolates the contribution of NC-SSM's frequency-aware conditioning (per-sub-band selectivity, stationarity-conditioned $\Delta$ floor, spectral-flatness-conditioned $\mathbf{B}$ base) over the base SM-SSM.
+The conditioning adds only 26 parameters (+0.35\%) but improves White noise at $-15$\,dB by \textbf{+19.7\,\%p} (31.1\% $\to$ 50.8\%), demonstrating that frequency-aware selectivity modulation is far more effective than scalar gating under broadband stationary noise.
+Clean accuracy improves slightly (+0.2\,\%p) and factory noise at 0\,dB shows a minor decrease ($-0.5$\,\%p), indicating that the conditioning primarily benefits extreme noise conditions without degrading moderate-noise or clean performance.
+The large White $-15$\,dB improvement reflects NC-SSM's per-sub-band gates correctly identifying uniformly low SNR across all bands and transitioning to LTI mode, whereas SM-SSM's scalar gate provides the same $\sigma$ to all states regardless of frequency content.
+
 
 % ============================================================
 % X. ANALYSIS AND DISCUSSION
@@ -1197,8 +1219,14 @@ The $\sigma$-gate drives selectivity toward zero at low SNR, reducing multiplica
 
 \subsection{Selectivity Gate Behavior}
 
-NC-SSM's per-sub-band selectivity gate $\bm{\sigma}$ learns frequency-aware modulation: under factory noise, low-frequency sub-bands reduce selectivity ($\sigma \to 0$, LTI mode) while high-frequency speech-dominant bands retain full selectivity ($\sigma \to 1$).
-This frequency-selective behavior---impossible with SM-SSM's scalar gate---enables NC-SSM to maintain competitive clean accuracy while improving noise robustness.
+NC-SSM's per-sub-band selectivity gate $\bm{\sigma}$ learns frequency-aware modulation that adapts to different noise profiles.
+Under factory noise (energy concentrated below 500\,Hz), the learned gate values show clear frequency dependence: low-frequency sub-bands (states 0--1, corresponding to 0--1\,kHz) reduce selectivity to $\sigma \approx 0.1$--$0.3$ (near-LTI mode), while high-frequency sub-bands (states 4--5, 3--8\,kHz) retain $\sigma \approx 0.8$--$0.95$ (near-full selectivity).
+Under white noise (spectrally flat), all sub-bands uniformly reduce selectivity to $\sigma \approx 0.2$--$0.4$, matching the uniform SNR degradation.
+
+This frequency-selective behavior---impossible with SM-SSM's single scalar gate---enables NC-SSM to achieve two simultaneous benefits:
+(1)~noise bands are protected by LTI-mode processing with $O(\sigma_n^2)$ variance, and
+(2)~clean bands retain full selective dynamics for speech discrimination.
+The result is that NC-SSM maintains competitive clean accuracy (+0.2\,\%p over NM-Matched) while substantially improving robustness under frequency-localized noise.
 
 \subsection{Deployment Efficiency on Edge Hardware}
 \label{sec:mcu_deploy}
@@ -1339,7 +1367,7 @@ These results establish that noise robustness and deployment efficiency are comp
 
 
 \section*{Code Availability}
-The complete training and evaluation code is available at \url{https://github.com/DrJinHoChoi/NC-SSM-TASLP}.
+The complete training and evaluation code is available at \url{https://github.com/DrJinHoChoi/NC-SSM-TASLP2026}.
 A Google Colab notebook provides end-to-end reproducibility: data download, model training, and full noise evaluation.
 
 \section*{Acknowledgments}
