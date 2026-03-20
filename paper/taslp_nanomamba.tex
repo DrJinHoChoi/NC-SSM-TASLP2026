@@ -24,10 +24,10 @@
 \definecolor{sharedcolor}{RGB}{52,168,83}
 \definecolor{newcolor}{RGB}{251,188,4}
 
-\title{NC-SSM: Intrinsically Noise-Robust State Space Models for Ultra-Efficient Keyword Spotting on Microcontrollers}
+\title{NC-SSM: Noise-Conditioned State Space Models for Robust and Efficient Keyword Spotting}
 
-\author{Jin~Ho~Choi%
-\thanks{J.~H.~Choi is with SmartEar Company, Seoul, South Korea (e-mail: jinhochoi@smartear.co.kr).}%
+\author{Jin~Ho~Choi,~\IEEEmembership{Member,~IEEE}%
+\thanks{J.~H.~Choi is CEO of SmartEar Co., Ltd., 1143-1 Geumri, Yuga-eup, Dalseong-gun, Daegu 43020, South Korea (e-mail: jinhochoi@smartear.co.kr; web: www.smartear.co.kr).}%
 \thanks{This paper extends the authors' preliminary work presented at Interspeech 2026~\cite{choi2026nanomamba_interspeech}. Extensions include: (1)~analysis of SSM structural noise robustness mechanisms (Section~\ref{sec:structural}), (2)~NC-SSM with per-sub-band selectivity, stationarity/spectral-flatness conditioning, and Learned Spectral Gate (Section~\ref{sec:ncssm}), (3)~extended evaluation with 6 models across 36~conditions (Section~\ref{sec:results}), and (4)~structural vs.\ training-based robustness decomposition (Section~\ref{sec:struct_vs_train}). Sections~\ref{sec:structural} and~\ref{sec:ncssm} are entirely new; Sections~\ref{sec:analysis} and~\ref{sec:smssm} are substantially extended.}%
 \thanks{Manuscript submitted March 2026.}}
 
@@ -49,7 +49,7 @@ The decisive advantage is computational: NC-SSM achieves \textbf{2.8$\times$ few
 \end{abstract}
 
 \begin{IEEEkeywords}
-Keyword spotting, state space model, noise robustness, selectivity modulation, microcontroller, ultra-efficient edge AI
+Keyword spotting, state space model, noise robustness, selectivity modulation, edge device, ultra-efficient edge AI
 \end{IEEEkeywords}
 
 
