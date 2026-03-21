@@ -84,25 +84,13 @@ class LaneHead(nn.Module):
         self.n_anchors = n_anchors
         self.n_grids = n_grids
 
-        # Row-anchor feature aggregation
-        # Instead of using full spatial features, aggregate per-row features
-        # from the NC-SSM output using lightweight attention
-        out_dim = n_lanes * n_anchors * (n_grids + 1)
-
-        # Ultra-lightweight factored head:
-        # Instead of Linear(d, 4*18*101) = massive,
-        # Factor: shared_fc -> per-lane fc -> per-anchor logits
-        # d_model -> d_mid -> n_anchors * (n_grids+1), repeated per lane
-        d_mid = max(d_model, 16)
-        self.shared_fc = nn.Linear(d_model, d_mid)
-        # Per-lane output: d_mid -> n_anchors * (n_grids+1)
-        # Further factored: predict lane existence + offset per anchor
-        self.lane_fc = nn.Linear(d_mid, n_lanes * n_anchors * 2)  # (x_offset, confidence)
+        # Row-wise spatial pooling + per-anchor prediction
+        # Instead of GAP (loses all spatial info), pool to n_anchors rows
+        # then predict per-row lane positions
+        d_mid = max(d_model * 2, 32)
+        self.row_fc = nn.Linear(d_model, d_mid)
+        self.lane_fc = nn.Linear(d_mid, n_lanes * 2)  # per-row: (x, conf) * n_lanes
         self.dropout = nn.Dropout(0.1)
-
-        # Grid classification is replaced by direct regression
-        # Each anchor predicts: (x_position [0,1], confidence [0,1])
-        # This reduces output from n_grids+1 classes to 2 values
         self._use_regression = True
 
     def forward(self, features):
@@ -112,17 +100,23 @@ class LaneHead(nn.Module):
         Returns:
             lane_preds: (B, n_lanes, n_anchors, 2) -- (x_position, confidence)
         """
-        B = features.size(0)
+        B, N, d = features.shape
 
-        # Global pooling (same as KWS GAP)
-        x = features.mean(dim=1)  # (B, d_model)
+        # Pool to n_anchors rows (preserves vertical spatial info)
+        # (B, N, d) -> (B, d, N) -> adaptive_avg_pool -> (B, d, n_anchors) -> (B, n_anchors, d)
+        x = features.transpose(1, 2)  # (B, d, N)
+        x = F.adaptive_avg_pool1d(x, self.n_anchors)  # (B, d, n_anchors)
+        x = x.transpose(1, 2)  # (B, n_anchors, d)
 
-        # Predict lane positions via regression
-        x = F.silu(self.shared_fc(x))
+        # Per-row prediction
+        x = F.silu(self.row_fc(x))  # (B, n_anchors, d_mid)
         x = self.dropout(x)
-        preds = self.lane_fc(x)  # (B, n_lanes * n_anchors * 2)
+        preds = self.lane_fc(x)  # (B, n_anchors, n_lanes * 2)
 
-        return preds.view(B, self.n_lanes, self.n_anchors, 2)
+        # Reshape to (B, n_lanes, n_anchors, 2)
+        preds = preds.view(B, self.n_anchors, self.n_lanes, 2)
+        preds = preds.permute(0, 2, 1, 3)  # (B, n_lanes, n_anchors, 2)
+        return preds
 
     def decode(self, preds, img_w=1640, img_h=590, conf_threshold=0.5):
         """Decode regression predictions to lane coordinates.
@@ -626,40 +620,40 @@ class NanoMambaMultiTaskDetector(nn.Module):
 # Factory Functions
 # ============================================================================
 
-def create_lane_detector_nano(img_size=288, n_lanes=4, **kwargs):
-    """Nano lane detector: ~15K params."""
+def create_lane_detector_nano(img_size=192, n_lanes=4, **kwargs):
+    """Nano lane detector: ~15K params. patch_size=32 -> 36 patches."""
     return NanoMambaLaneDetector(
-        img_size=img_size, patch_size=16, n_lanes=n_lanes,
+        img_size=img_size, patch_size=32, n_lanes=n_lanes,
         n_anchors=18, n_grids=50,
         d_model=16, d_state=4, n_repeats=4, **kwargs)
 
 
-def create_lane_detector_tiny(img_size=288, n_lanes=4, **kwargs):
-    """Tiny lane detector: ~25K params."""
+def create_lane_detector_tiny(img_size=192, n_lanes=4, **kwargs):
+    """Tiny lane detector: ~25K params. patch_size=32 -> 36 patches."""
     return NanoMambaLaneDetector(
-        img_size=img_size, patch_size=16, n_lanes=n_lanes,
+        img_size=img_size, patch_size=32, n_lanes=n_lanes,
         n_anchors=18, n_grids=100,
         d_model=24, d_state=6, n_repeats=4, **kwargs)
 
 
-def create_critical_detector_nano(img_size=288, n_classes=5, **kwargs):
+def create_critical_detector_nano(img_size=192, n_classes=5, **kwargs):
     """Nano critical object detector: ~15K params."""
     return NanoMambaCriticalDetector(
-        img_size=img_size, patch_size=16, n_classes=n_classes,
+        img_size=img_size, patch_size=32, n_classes=n_classes,
         d_model=16, d_state=4, n_repeats=4, **kwargs)
 
 
-def create_critical_detector_tiny(img_size=288, n_classes=5, **kwargs):
+def create_critical_detector_tiny(img_size=192, n_classes=5, **kwargs):
     """Tiny critical object detector: ~22K params."""
     return NanoMambaCriticalDetector(
-        img_size=img_size, patch_size=16, n_classes=n_classes,
+        img_size=img_size, patch_size=32, n_classes=n_classes,
         d_model=24, d_state=6, n_repeats=4, **kwargs)
 
 
-def create_multitask_detector_tiny(img_size=288, **kwargs):
+def create_multitask_detector_tiny(img_size=192, **kwargs):
     """Tiny multi-task (lane + detection): ~30K params."""
     return NanoMambaMultiTaskDetector(
-        img_size=img_size, patch_size=16,
+        img_size=img_size, patch_size=32,
         n_lanes=4, n_anchors=18, n_grids=100,
         n_det_classes=5,
         d_model=24, d_state=6, n_repeats=4, **kwargs)

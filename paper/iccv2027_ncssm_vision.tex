@@ -1,5 +1,5 @@
 \documentclass[10pt,twocolumn,letterpaper]{article}
-\usepackage{iccv}
+\usepackage[pagenumbers]{cvpr}
 \usepackage{times}
 \usepackage{epsfig}
 \usepackage{graphicx}
@@ -25,10 +25,9 @@
 \definecolor{sharedcolor}{RGB}{52,168,83}
 \definecolor{newcolor}{RGB}{251,188,4}
 
-\iccvfinalcopy % *** Uncomment this line for the final submission
-
-\def\iccvPaperID{****}
-\def\httilde{\mbox{\tt\raisebox{-.5ex}{\symbol{126}}}}
+\def\cvprPaperID{****}
+\def\confName{ICCV}
+\def\confYear{2027}
 
 \begin{document}
 
@@ -206,33 +205,28 @@ Therefore, $\min_{f \in \mathcal{H}_{\text{NC-SSM}}} \mathcal{L}(f) \leq \min_{f
 \begin{figure*}[t]
 \centering
 \begin{tikzpicture}[
-  block/.style={draw, rounded corners=3pt, minimum height=0.8cm, minimum width=2cm, font=\small, align=center},
-  signal/.style={draw, rounded corners=3pt, minimum height=0.8cm, minimum width=2cm, font=\small, fill=gray!10, dashed},
+  block/.style={draw, rounded corners=3pt, minimum height=0.7cm, text width=1.4cm, font=\footnotesize, align=center},
+  signal/.style={draw, rounded corners=3pt, minimum height=0.7cm, text width=1.5cm, font=\footnotesize, fill=gray!10, dashed, align=center},
   arrow/.style={-{Stealth[length=2mm]}, thick},
   note/.style={font=\scriptsize, text=gray},
 ]
-% Pipeline
-\node[block, fill=blue!10] (img) {Image\\$B{\times}3{\times}H{\times}W$};
-\node[signal, right=0.6cm of img] (retinex) {Retinex+Bypass\\(0 params)};
-\node[block, fill=green!10, right=0.6cm of retinex] (patch) {Conv2d\\PatchEmbed};
-\node[signal, right=0.6cm of patch] (vis) {Visibility\\Estimator (0p)};
-\node[signal, below=0.5cm of vis] (dualnorm) {DualNorm MoE\\(1 param)};
-\node[block, fill=orange!15, right=0.6cm of vis] (ncssm) {NC-SSM Block\\$\times N$ (shared)};
-\node[block, fill=red!10, right=0.6cm of ncssm] (head) {Task Head\\(Lane/Det)};
+\node[block, fill=blue!10] (img) {Image};
+\node[signal, right=0.35cm of img] (retinex) {Retinex Bypass (0p)};
+\node[block, fill=green!10, right=0.35cm of retinex] (patch) {Conv2d Patch};
+\node[signal, right=0.35cm of patch] (vis) {Vis\-Est (0p)};
+\node[signal, below=0.35cm of vis] (dualnorm) {DualNorm MoE (1p)};
+\node[block, fill=orange!15, right=0.35cm of vis] (ncssm) {NC-SSM ${\times}N$};
+\node[block, fill=red!10, right=0.35cm of ncssm] (head) {Task Head};
 
 \draw[arrow] (img) -- (retinex);
 \draw[arrow] (retinex) -- (patch);
 \draw[arrow] (patch) -- (vis);
-\draw[arrow] (vis) -- (ncssm) node[midway, above, note] {vis patches};
-\draw[arrow] (dualnorm) -| (ncssm) node[near start, left, note] {norm gate};
+\draw[arrow] (vis) -- (ncssm) node[midway, above, note] {$\sigma$ gates};
+\draw[arrow] (dualnorm) -| (ncssm) node[near start, left, note] {gate};
 \draw[arrow] (patch) |- (dualnorm);
 \draw[arrow] (ncssm) -- (head);
-
-% Labels
-\node[note, below=0.15cm of retinex] {illumination correction};
-\node[note, below=0.15cm of patch] {$3{\times}P{\times}P \to d$};
 \end{tikzpicture}
-\caption{\textbf{NC-SSM Vision pipeline.} Three zero-parameter signal processing modules (dashed) condition the NC-SSM backbone. The entire backbone uses weight sharing (single block repeated $N$ times). Total: 21.1K params for Tiny configuration.}
+\caption{\textbf{NC-SSM Vision pipeline.} Dashed = zero-parameter signal processing. Backbone uses weight sharing (1 block $\times N$ repeats). Tiny config: 21.1K params.}
 \label{fig:pipeline}
 \end{figure*}
 
@@ -272,10 +266,10 @@ Routing is determined by \textbf{spatial uniformity} (geometric/arithmetic mean 
 \text{SU} = \frac{\exp(\mathbb{E}[\log E_i])}{\mathbb{E}[E_i]}, \quad
 \text{TG} = \frac{\|x - x_{\text{prev}}\|_1}{\|x\|_1},
 \end{equation}
-\begin{equation}
-g_{\text{MoE}} = \sigma\!\left(T \cdot (\text{SU}_{\text{adj}} - 0.5)\right), \quad
-\text{SU}_{\text{adj}} = \text{SU} + (1{-}\text{SU}) \cdot \text{ReLU}(0.4{-}\text{TG}).
-\end{equation}
+\begin{align}
+g_{\text{MoE}} &= \sigma\!\left(T \cdot (\text{SU}_{\text{adj}} - 0.5)\right), \nonumber \\
+\text{SU}_{\text{adj}} &= \text{SU} + (1{-}\text{SU}) \cdot \text{ReLU}(0.4{-}\text{TG}).
+\end{align}
 The sole learnable parameter is the gate temperature $T$ (initialized to 5.0).
 
 
@@ -313,10 +307,11 @@ The block structure is: LayerNorm $\to$ Linear$_{\text{in}}$ (gated) $\to$ DWCon
 
 \begin{table}[t]
 \centering
-\caption{\textbf{NC-SSM Vision model configurations.} INT8 size assumes 1 byte per parameter. ``WS'' = weight sharing.}
+\caption{\textbf{NC-SSM Vision model configurations.} INT8 = 1\,B/param. WS = weight sharing.}
 \label{tab:configs}
-\small
-\begin{tabular}{lccccc}
+\setlength{\tabcolsep}{4pt}
+\footnotesize
+\begin{tabular}{@{}lccrrc@{}}
 \toprule
 \textbf{Model} & $d$ & $N$ & \textbf{Params} & \textbf{INT8} & \textbf{WS} \\
 \midrule
@@ -398,50 +393,52 @@ We evaluate on CULane~\cite{pan2018culane} for lane detection, which includes tu
 
 \begin{table}[t]
 \centering
-\caption{\textbf{Lane detection per-condition accuracy.} NC-SSM Vision vs.\ baselines under varying visibility conditions. ``Gap'' shows improvement over the unconditioned SSM baseline.}
+\caption{\textbf{Lane detection accuracy (\%) by condition.}}
 \label{tab:lane_results}
-\small
-\begin{tabular}{lcccccc}
+\setlength{\tabcolsep}{3pt}
+\footnotesize
+\begin{tabular}{@{}lr ccccc@{}}
 \toprule
-\textbf{Model} & \textbf{Params} & \textbf{Normal} & \textbf{Dark} & \textbf{Glare} & \textbf{Fog} & \textbf{Shadow} \\
+\textbf{Model} & \textbf{\#P} & \textbf{Norm} & \textbf{Dark} & \textbf{Glr} & \textbf{Fog} & \textbf{Shd} \\
 \midrule
 \multicolumn{7}{l}{\textit{Baselines}} \\
-MobileNet-Tiny & -- & -- & -- & -- & -- & -- \\
-Vim-Tiny & -- & -- & -- & -- & -- & -- \\
+MobNet-T & -- & -- & -- & -- & -- & -- \\
+Vim-T & -- & -- & -- & -- & -- & -- \\
 \midrule
 \multicolumn{7}{l}{\textit{Ours}} \\
-NC-SSM-Nano  & 17.8K & -- & -- & -- & -- & -- \\
-NC-SSM-Tiny  & 25.0K & -- & -- & -- & -- & -- \\
-NC-SSM-Small & 33.2K & -- & -- & -- & -- & -- \\
+NC-Nano  & 18K & -- & -- & -- & -- & -- \\
+NC-Tiny  & 25K & -- & -- & -- & -- & -- \\
+NC-Small & 33K & -- & -- & -- & -- & -- \\
 \midrule
-\multicolumn{7}{l}{\textit{Ablation (NC-SSM-Tiny without:)}} \\
-\quad w/o Retinex & 25.0K & -- & -- & -- & -- & -- \\
-\quad w/o DualNorm & 25.0K & -- & -- & -- & -- & -- \\
-\quad w/o NC ($\sigma{=}1$) & 25.0K & -- & -- & -- & -- & -- \\
-\quad w/o WtShare & 88.7K & -- & -- & -- & -- & -- \\
+\multicolumn{7}{l}{\textit{Ablation (NC-Tiny w/o:)}} \\
+\;Retinex & 25K & -- & -- & -- & -- & -- \\
+\;DualNorm & 25K & -- & -- & -- & -- & -- \\
+\;NC ($\sigma{=}1$) & 25K & -- & -- & -- & -- & -- \\
+\;WtShare & 89K & -- & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{table}[t]
 \centering
-\caption{\textbf{Critical object spotting per-condition recall.} Evaluated on synthetic tunnel scenarios. ``Visual KWS'' analogy: detecting safety-critical objects is analogous to wake-word detection.}
+\caption{\textbf{Critical object recall (\%) by condition.}}
 \label{tab:det_results}
-\small
-\begin{tabular}{lcccccc}
+\setlength{\tabcolsep}{3pt}
+\footnotesize
+\begin{tabular}{@{}lr ccccc@{}}
 \toprule
-\textbf{Model} & \textbf{Params} & \textbf{Normal} & \textbf{Dark} & \textbf{Glare} & \textbf{Fog} & \textbf{Shadow} \\
+\textbf{Model} & \textbf{\#P} & \textbf{Norm} & \textbf{Dark} & \textbf{Glr} & \textbf{Fog} & \textbf{Shd} \\
 \midrule
-NC-SSM-Tiny  & 21.3K & -- & -- & -- & -- & -- \\
+NC-Tiny  & 21K & -- & -- & -- & -- & -- \\
 \midrule
 \multicolumn{7}{l}{\textit{Ablation}} \\
-\quad w/o Retinex & -- & -- & -- & -- & -- & -- \\
-\quad w/o NC & -- & -- & -- & -- & -- & -- \\
+\;w/o Retinex & -- & -- & -- & -- & -- & -- \\
+\;w/o NC & -- & -- & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\textit{Results tables will be populated after training completes on CULane and synthetic benchmarks.}
+\textit{Results to be populated after CULane training.}
 
 
 \subsection{Ablation Study}
@@ -460,26 +457,25 @@ We ablate each component to quantify its contribution:
 
 \begin{table}[t]
 \centering
-\caption{\textbf{Efficiency comparison.} NC-SSM Vision vs.\ lightweight vision models. INT8 size, MACs for $288 \times 288$ input.}
+\caption{\textbf{Efficiency comparison} ($288{\times}288$ input).}
 \label{tab:efficiency}
-\small
-\begin{tabular}{lccccc}
+\setlength{\tabcolsep}{4pt}
+\footnotesize
+\begin{tabular}{@{}lrrl@{}}
 \toprule
-\textbf{Model} & \textbf{Params} & \textbf{INT8} & \textbf{MACs} & \textbf{RAM} \\
+\textbf{Model} & \textbf{Params} & \textbf{INT8} & \textbf{MACs} \\
 \midrule
-MobileNetV3-S & 2.5M & 2.5\,MB & 56M & -- \\
-EfficientNet-B0 & 5.3M & 5.3\,MB & 390M & -- \\
-Vim-Ti & 5.7M & 5.7\,MB & -- & -- \\
-Ultra-Fast-S & 0.9M & 0.9\,MB & -- & -- \\
+MobileNetV3-S & 2.5M & 2.5\,MB & 56M \\
+EfficientNet-B0 & 5.3M & 5.3\,MB & 390M \\
+Vim-Ti & 5.7M & 5.7\,MB & -- \\
+Ultra-Fast-S & 0.9M & 0.9\,MB & -- \\
 \midrule
-NC-SSM-Tiny & \textbf{25.0K} & \textbf{24.4\,KB} & -- & -- \\
-NC-SSM-Small & 33.2K & 32.4\,KB & -- & -- \\
+\textbf{NC-SSM-Tiny} & \textbf{25K} & \textbf{24\,KB} & -- \\
+NC-SSM-Small & 33K & 32\,KB & -- \\
 \bottomrule
+\multicolumn{4}{l}{\scriptsize NC-SSM: $100{\times}$ fewer params than smallest baseline.}
 \end{tabular}
 \end{table}
-
-NC-SSM Vision achieves 100$\times$ parameter reduction compared to the smallest baseline, enabled by weight sharing and zero-parameter signal processing.
-
 
 % ============================================================
 % 7. ANALYSIS
@@ -497,7 +493,7 @@ The per-sub-region modulation enables \emph{spatial adaptivity} analogous to per
 \begin{figure}[t]
 \centering
 % Placeholder for sigma gate visualization
-\fbox{\parbox{0.95\linewidth}{\centering\vspace{2cm}\textit{Sigma gate heatmaps across conditions}\vspace{2cm}}}
+\fbox{\parbox{0.9\linewidth}{\centering\vspace{1.2cm}\footnotesize\textit{$\sigma$ gate heatmaps across conditions}\vspace{1.2cm}}}
 \caption{\textbf{Per-sub-region selectivity gates.} Left: normal (all $\sigma \approx 1$). Middle: partial shadow (mixed $\sigma$). Right: dark tunnel ($\sigma \approx 0$ in shadow regions).}
 \label{fig:sigma_gates}
 \end{figure}
@@ -513,7 +509,9 @@ The DualNorm MoE gate learns to route towards GroupNorm (static expert) under su
 \caption{\textbf{Audio-Vision NC-SSM correspondence.} Each vision component has a direct audio counterpart with identical mathematical structure.}
 \label{tab:mapping}
 \small
-\begin{tabular}{p{3.2cm}p{3.8cm}}
+\setlength{\tabcolsep}{3pt}
+\footnotesize
+\begin{tabular}{@{}ll@{}}
 \toprule
 \textbf{Audio NC-SSM} & \textbf{Vision NC-SSM} \\
 \midrule
@@ -569,7 +567,7 @@ Applied to tunnel safety (lane detection + critical object spotting), NC-SSM Vis
 % REFERENCES
 % ============================================================
 {\small
-\bibliographystyle{ieee_fullname}
+\bibliographystyle{ieeenat_fullname}
 \bibliography{refs_iccv}
 }
 
