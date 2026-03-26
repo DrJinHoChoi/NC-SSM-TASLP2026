@@ -75,7 +75,7 @@ For video sequences with temporally varying degradation (e.g., tunnel entry/exit
 \setlength\itemsep{0pt}
 \item \textbf{NC-Conv block}: Dual-path convolution with learned $\sigma$ gate providing noise-conditioned routing between expressive and robust paths (Section~\ref{sec:method}).
 \item \textbf{Severity scaling}: On CIFAR-10-C, NC-Conv's advantage grows monotonically with corruption severity ($+0.5\%$ to $+2.9\%$), directly validating the noise propagation theory (Section~\ref{sec:cifar10c}).
-\item \textbf{Temporal NC-SSM}: Extension to video with per-frame quality-conditioned temporal dynamics for illumination-varying sequences (Section~\ref{sec:temporal}).
+\item \textbf{Temporal NC-SSM}: Extension to video with per-frame quality-conditioned temporal dynamics for illumination-varying sequences (Sections~\ref{sec:temporal_theory} and~\ref{sec:temporal_exp}).
 \item \textbf{Audio-vision unification}: We establish noise-conditioned computation as a modality-agnostic framework, with direct correspondence between audio NC-SSM and vision NC-Conv components (Section~\ref{sec:analysis}).
 \end{enumerate}
 
