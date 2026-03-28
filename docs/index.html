@@ -156,6 +156,81 @@ section { position:relative; z-index:1; }
 .demo-log .keyword { color:var(--accent3); font-weight:700; }
 .demo-log .conf { color:var(--gold); }
 
+/* STREAMING */
+#streaming { padding:100px 0; background:var(--bg2); }
+.stream-compare {
+  display:grid; grid-template-columns:1fr 1fr; gap:30px; margin-bottom:40px;
+}
+.stream-card {
+  background:var(--bg); border:1px solid rgba(255,255,255,0.06);
+  border-radius:20px; padding:32px; position:relative;
+}
+.stream-card.ours {
+  border-color:rgba(0,229,255,0.3);
+  background:linear-gradient(135deg,rgba(0,229,255,0.05),rgba(124,77,255,0.05));
+}
+.stream-card h3 { font-size:20px; font-weight:800; margin-bottom:4px; }
+.stream-card .family { font-size:12px; color:var(--text2); margin-bottom:20px; }
+.stream-card .tag2 {
+  position:absolute; top:16px; right:16px;
+  font-size:10px; font-weight:700; letter-spacing:1px; text-transform:uppercase;
+  padding:4px 10px; border-radius:8px; background:rgba(0,229,255,0.2); color:var(--accent);
+}
+.stream-pipeline {
+  background:rgba(0,0,0,0.3); border-radius:12px; padding:16px; margin-bottom:16px;
+  font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.8;
+}
+.stream-pipeline .arrow { color:var(--accent); }
+.stream-pipeline .stage { color:var(--text2); }
+.stream-pipeline .highlight { color:var(--accent3); font-weight:700; }
+.stream-features { display:flex; flex-direction:column; gap:10px; }
+.stream-feat {
+  display:flex; align-items:flex-start; gap:10px; font-size:13px;
+}
+.stream-feat .icon { font-size:16px; min-width:20px; text-align:center; }
+.stream-feat .desc { color:var(--text2); }
+.stream-feat .desc b { color:var(--text); }
+
+.stream-timeline {
+  background:var(--bg); border:1px solid rgba(255,255,255,0.06);
+  border-radius:20px; padding:32px;
+}
+.stream-timeline h3 { font-size:18px; font-weight:800; margin-bottom:20px; text-align:center; }
+.timeline-row {
+  display:grid; grid-template-columns:100px 1fr; gap:16px; align-items:center;
+  margin-bottom:12px;
+}
+.timeline-label { font-size:12px; font-weight:700; color:var(--text2); text-align:right; }
+.timeline-bar-bg {
+  height:32px; background:rgba(255,255,255,0.03); border-radius:8px;
+  position:relative; overflow:hidden;
+}
+.timeline-bar {
+  height:100%; border-radius:8px; display:flex; align-items:center;
+  padding:0 12px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700;
+}
+.timeline-marker {
+  position:absolute; top:0; height:100%; width:2px; background:var(--accent3);
+}
+.timeline-marker-label {
+  position:absolute; top:-18px; font-size:10px; color:var(--accent3);
+  font-weight:700; white-space:nowrap; transform:translateX(-50%);
+}
+
+.stream-advantages {
+  display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-top:40px;
+}
+.stream-adv {
+  text-align:center; padding:24px 16px;
+  background:var(--bg); border:1px solid rgba(255,255,255,0.06);
+  border-radius:16px;
+}
+.stream-adv .num {
+  font-size:28px; font-weight:900; font-family:'JetBrains Mono',monospace;
+  background:var(--gradient); -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+}
+.stream-adv .lbl { font-size:11px; color:var(--text2); margin-top:4px; text-transform:uppercase; letter-spacing:0.5px; }
+
 /* BENCHMARK */
 #benchmark { padding:100px 0; }
 .bench-grid {
@@ -346,6 +421,7 @@ footer {
   <div class="nav-logo">NC-SSM</div>
   <div class="nav-links">
     <a href="#demo">Live Demo</a>
+    <a href="#streaming">Streaming</a>
     <a href="#benchmark">Benchmark</a>
     <a href="#business">Business</a>
     <a href="#hardware">Hardware</a>
@@ -402,6 +478,113 @@ footer {
       </div>
       <div class="demo-log" id="demoLog">
         <div class="entry"><span class="time">[system]</span> NC-SSM demo ready. Click microphone to begin.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STREAMING ADVANTAGE -->
+<section id="streaming">
+  <div class="container">
+    <div class="sec-title">
+      <h2>Streaming <span class="grad">Advantage</span></h2>
+      <p>Why SSM architecture fundamentally outperforms CNN in real-time voice AI</p>
+    </div>
+
+    <!-- SSM vs CNN Comparison -->
+    <div class="stream-compare">
+      <!-- NC-SSM -->
+      <div class="stream-card ours">
+        <div class="tag2">SSM</div>
+        <h3>NC-SSM Streaming</h3>
+        <div class="family">Stateful Sequential Processing</div>
+        <div class="stream-pipeline">
+          <span class="stage">Mic</span> <span class="arrow">&rarr;</span>
+          <span class="stage">VAD</span> <span class="arrow">&rarr;</span>
+          <span class="highlight">Onset Detection</span> <span class="arrow">&rarr;</span>
+          <span class="highlight">Progressive Classify</span><br>
+          <span class="stage">&nbsp;&nbsp;+300ms</span> <span class="arrow">&rarr;</span> <span class="stage">1st attempt (short words)</span><br>
+          <span class="stage">&nbsp;&nbsp;+500ms</span> <span class="arrow">&rarr;</span> <span class="stage">2nd attempt (medium)</span><br>
+          <span class="stage">&nbsp;&nbsp;+750ms</span> <span class="arrow">&rarr;</span> <span class="stage">3rd attempt (confirm)</span><br>
+          <span class="highlight">confidence &gt; threshold &rarr; DETECTED!</span>
+        </div>
+        <div class="stream-features">
+          <div class="stream-feat"><div class="icon">&#9889;</div><div class="desc"><b>Stateful hidden state</b> &mdash; h<sub>t</sub> accumulates temporal context naturally. No recomputation needed per window.</div></div>
+          <div class="stream-feat"><div class="icon">&#127919;</div><div class="desc"><b>Progressive classification</b> &mdash; Short words ("go") detected at 300ms, long words ("right") at 500ms. Average response: ~400ms.</div></div>
+          <div class="stream-feat"><div class="icon">&#128267;</div><div class="desc"><b>Zero feature map memory</b> &mdash; Only 720 bytes hidden state. Fits on $1.50 FPGA.</div></div>
+          <div class="stream-feat"><div class="icon">&#128161;</div><div class="desc"><b>Energy-aware</b> &mdash; Silence = skip inference entirely. 0 MACs during idle. 10x battery life.</div></div>
+        </div>
+      </div>
+
+      <!-- CNN -->
+      <div class="stream-card">
+        <h3>CNN Streaming (DS-CNN-S)</h3>
+        <div class="family">Stateless Window Processing</div>
+        <div class="stream-pipeline">
+          <span class="stage">Mic</span> <span class="arrow">&rarr;</span>
+          <span class="stage">Buffer 1.0s</span> <span class="arrow">&rarr;</span>
+          <span class="stage">Full Inference</span> <span class="arrow">&rarr;</span>
+          <span class="stage">Result</span><br><br>
+          <span class="stage">Every 1s: re-buffer &rarr; re-compute entire window</span><br>
+          <span class="stage">No state carried between windows</span><br>
+          <span class="stage">Short words may be split across windows</span>
+        </div>
+        <div class="stream-features">
+          <div class="stream-feat"><div class="icon">&#128260;</div><div class="desc"><b>Stateless</b> &mdash; Each window is independent. Must recompute 24.3M MACs every time, even for same audio.</div></div>
+          <div class="stream-feat"><div class="icon">&#9203;</div><div class="desc"><b>Fixed 1s buffer</b> &mdash; Must wait full second. "go" (200ms) wastes 800ms of buffer. Minimum latency = 1000ms.</div></div>
+          <div class="stream-feat"><div class="icon">&#128190;</div><div class="desc"><b>196 KB feature maps</b> &mdash; Conv2d stores all intermediate tensors. Cannot fit on low-cost FPGA.</div></div>
+          <div class="stream-feat"><div class="icon">&#128267;</div><div class="desc"><b>Always computing</b> &mdash; No speech awareness. Burns 24.3M MACs on silence. Battery drain constant.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Timeline Comparison -->
+    <div class="stream-timeline">
+      <h3>Detection Timeline: "Go" (200ms word)</h3>
+      <div class="timeline-row">
+        <div class="timeline-label">NC-SSM</div>
+        <div class="timeline-bar-bg">
+          <div class="timeline-bar" style="width:35%;background:linear-gradient(90deg,rgba(0,229,255,0.3),rgba(0,230,118,0.5))">
+            onset &rarr; classify &rarr; DETECTED
+          </div>
+          <div class="timeline-marker" style="left:35%">
+            <div class="timeline-marker-label">~350ms</div>
+          </div>
+        </div>
+      </div>
+      <div class="timeline-row">
+        <div class="timeline-label">DS-CNN-S</div>
+        <div class="timeline-bar-bg">
+          <div class="timeline-bar" style="width:100%;background:rgba(255,82,82,0.2)">
+            buffer 1000ms ... full inference 53ms ... DETECTED
+          </div>
+          <div class="timeline-marker" style="left:100%">
+            <div class="timeline-marker-label" style="color:var(--danger)">~1053ms</div>
+          </div>
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:16px;font-size:14px;color:var(--text2)">
+        NC-SSM detects <span style="color:var(--accent3);font-weight:800;font-size:18px">3x faster</span> for short keywords
+      </div>
+    </div>
+
+    <!-- Key Advantages -->
+    <div class="stream-advantages">
+      <div class="stream-adv">
+        <div class="num">~350ms</div>
+        <div class="lbl">Short Word Detection</div>
+      </div>
+      <div class="stream-adv">
+        <div class="num">720B</div>
+        <div class="lbl">Hidden State Memory</div>
+      </div>
+      <div class="stream-adv">
+        <div class="num">0 MACs</div>
+        <div class="lbl">During Silence</div>
+      </div>
+      <div class="stream-adv">
+        <div class="num">10x</div>
+        <div class="lbl">Battery Life</div>
       </div>
     </div>
   </div>
