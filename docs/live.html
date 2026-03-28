@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NC-SSM — Real-Time Voice AI</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --surface2: #f5f5f7;
+  --border: #e5e5ea;
+  --border2: #d1d1d6;
+  --text: #1d1d1f;
+  --text2: #6e6e73;
+  --text3: #aeaeb2;
+  --primary: #0071e3;
+  --primary-light: #e8f2fe;
+  --green: #34c759;
+  --green-light: #eafaf1;
+  --red: #ff3b30;
+  --red-light: #fef0ef;
+  --orange: #ff9500;
+  --purple: #af52de;
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06);
+  --shadow-lg: 0 4px 24px rgba(0,0,0,0.08);
+  --transition: 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+html { height:100%; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── LAYOUT ── */
+.app { display:grid; grid-template-rows:64px 1fr; height:100vh; }
+
+/* ── NAV ── */
+.nav {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 32px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  z-index: 10;
+}
+.nav-left { display:flex; align-items:center; gap:24px; }
+.nav-brand {
+  font-size: 18px; font-weight: 800; letter-spacing: -0.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.nav-brand span { color: var(--primary); }
+.nav-divider { width:1px; height:24px; background:var(--border); }
+.nav-tag {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+  color: var(--primary); background: var(--primary-light);
+  padding: 4px 10px; border-radius: 6px; text-transform: uppercase;
+}
+
+.nav-center { display:flex; gap:2px; background:var(--surface2); border-radius:10px; padding:3px; }
+.model-tab {
+  padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 500;
+  color: var(--text2); cursor: pointer; border: none; background: none;
+  transition: all var(--transition); white-space: nowrap;
+}
+.model-tab:hover { color: var(--text); }
+.model-tab.active {
+  background: var(--surface); color: var(--text); font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+.nav-right { display:flex; align-items:center; gap:16px; }
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--text3);
+  transition: background var(--transition);
+}
+.status-dot.active { background: var(--green); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(52,199,89,0.3)} 50%{box-shadow:0 0 0 6px rgba(52,199,89,0)} }
+.status-text { font-size: 12px; color: var(--text2); font-weight: 500; }
+.threshold-control { display:flex; align-items:center; gap:8px; }
+.threshold-control label { font-size: 11px; color: var(--text3); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+.threshold-control input[type="range"] {
+  width: 80px; height: 4px; -webkit-appearance: none; background: var(--border);
+  border-radius: 2px; outline: none;
+}
+.threshold-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--primary); cursor: pointer; border: 2px solid var(--surface);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+}
+.threshold-val { font-family:'JetBrains Mono'; font-size:12px; color:var(--text2); font-weight:500; min-width:30px; }
+
+/* ── MAIN ── */
+.main { display:grid; grid-template-columns:1fr 320px; gap:0; overflow:hidden; }
+
+/* ── LEFT: Visualization ── */
+.viz-panel { display:flex; flex-direction:column; padding:32px; gap:24px; overflow:hidden; }
+
+/* Detection Display */
+.detection-hero {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 200px; flex-shrink: 0;
+  background: var(--surface); border-radius: var(--radius);
+  border: 1px solid var(--border);
+  position: relative; overflow: hidden;
+  transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.detection-hero.detected {
+  border-color: var(--green);
+  box-shadow: 0 0 0 1px var(--green), 0 8px 32px rgba(52,199,89,0.15);
+}
+.detection-hero.detected .det-bg {
+  opacity: 1;
+}
+.det-bg {
+  position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(52,199,89,0.04), rgba(0,113,227,0.04));
+  opacity: 0; transition: opacity 0.4s;
+}
+.det-content { position:relative; text-align:center; z-index:1; }
+.det-word {
+  font-size: 72px; font-weight: 800; letter-spacing: -3px;
+  color: var(--text3); line-height: 1;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.det-word.active {
+  color: var(--text);
+  transform: scale(1.05);
+}
+.det-conf {
+  font-family: 'JetBrains Mono'; font-size: 16px; font-weight: 500;
+  color: var(--text3); margin-top: 8px;
+  transition: color var(--transition);
+}
+.det-conf.active { color: var(--green); }
+.det-meta {
+  display: flex; gap: 24px; justify-content: center; margin-top: 16px;
+}
+.det-meta-item {
+  font-size: 11px; color: var(--text3); font-weight: 500;
+  display: flex; align-items: center; gap: 4px;
+}
+.det-meta-item span { font-family:'JetBrains Mono'; color:var(--text2); }
+
+/* Waveform */
+.wave-section {
+  flex: 1; min-height: 120px;
+  background: var(--surface); border-radius: var(--radius);
+  border: 1px solid var(--border); overflow: hidden;
+  position: relative;
+}
+#waveCanvas { width:100%; height:100%; display:block; }
+
+/* Keyword Grid */
+.kw-section { flex-shrink:0; }
+.kw-grid {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
+}
+.kw-chip {
+  padding: 14px 8px; text-align: center; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border);
+  font-size: 14px; font-weight: 600; color: var(--text2);
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  cursor: default;
+}
+.kw-chip.detected {
+  background: var(--green-light); border-color: var(--green);
+  color: var(--green); transform: scale(1.06);
+  box-shadow: 0 4px 12px rgba(52,199,89,0.15);
+}
+.kw-chip.silence { color:var(--text3); background:var(--surface2); }
+
+/* Mic Button */
+.mic-row {
+  display: flex; align-items: center; justify-content: center; gap: 20px;
+  flex-shrink: 0;
+}
+.btn-mic {
+  width: 56px; height: 56px; border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--surface); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+  transition: all var(--transition);
+  box-shadow: var(--shadow);
+}
+.btn-mic:hover { border-color: var(--primary); transform: scale(1.05); }
+.btn-mic.active {
+  border-color: var(--red);
+  background: var(--red-light);
+  animation: mic-pulse 2s infinite;
+}
+@keyframes mic-pulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(255,59,48,0.2); }
+  50% { box-shadow: 0 0 0 12px rgba(255,59,48,0); }
+}
+.mic-label { font-size: 14px; font-weight: 500; color: var(--text2); }
+
+/* ── RIGHT: Sidebar ── */
+.sidebar {
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.sidebar-header {
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px; font-weight: 600; color: var(--text2);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+
+/* Probability Bars */
+.prob-section { flex:1; overflow-y:auto; padding:12px 20px; }
+.prob-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 0;
+}
+.prob-label {
+  font-size: 12px; font-weight: 600; color: var(--text2);
+  min-width: 56px; text-transform: uppercase;
+  font-family: 'JetBrains Mono';
+}
+.prob-bar-bg {
+  flex: 1; height: 8px; background: var(--surface2);
+  border-radius: 4px; overflow: hidden;
+}
+.prob-bar {
+  height: 100%; border-radius: 4px;
+  background: var(--border2);
+  transition: width 0.15s ease, background 0.15s ease;
+  min-width: 0;
+}
+.prob-bar.top { background: var(--primary); }
+.prob-bar.detected { background: var(--green); }
+.prob-val {
+  font-family: 'JetBrains Mono'; font-size: 11px; font-weight: 500;
+  color: var(--text3); min-width: 36px; text-align: right;
+}
+
+/* Stats */
+.stats-section {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+.stat-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 0;
+}
+.stat-label { font-size: 11px; color: var(--text3); font-weight: 500; }
+.stat-val {
+  font-family: 'JetBrains Mono'; font-size: 12px; font-weight: 600;
+  color: var(--text2);
+}
+
+/* Log */
+.log-section {
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--border);
+  max-height: 180px; overflow-y: auto;
+}
+.log-section h4 {
+  font-size: 11px; font-weight: 600; color: var(--text3);
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;
+}
+.log-entry {
+  font-family: 'JetBrains Mono'; font-size: 11px;
+  padding: 3px 0; color: var(--text2);
+  display: flex; gap: 8px;
+}
+.log-time { color: var(--text3); }
+.log-kw { color: var(--green); font-weight: 600; }
+.log-conf { color: var(--primary); }
+
+/* Energy meter */
+.energy-meter {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+.energy-label { font-size: 11px; color: var(--text3); font-weight: 500; min-width: 50px; }
+.energy-bar-bg {
+  flex: 1; height: 6px; background: var(--surface2);
+  border-radius: 3px; overflow: hidden;
+}
+.energy-bar {
+  height: 100%; border-radius: 3px;
+  background: var(--primary);
+  transition: width 0.1s ease;
+  width: 0%;
+}
+.energy-val {
+  font-family: 'JetBrains Mono'; font-size: 11px; color: var(--text3);
+  min-width: 42px; text-align: right;
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- NAV -->
+<div class="nav">
+  <div class="nav-left">
+    <div class="nav-brand" onclick="location.reload()">NC<span>-SSM</span></div>
+    <div class="nav-divider"></div>
+    <div class="nav-tag">Live Demo</div>
+  </div>
+  <div class="nav-center" id="modelTabs"></div>
+  <div class="nav-right">
+    <div style="display:flex;align-items:center;gap:6px">
+      <div class="status-dot" id="statusDot"></div>
+      <div class="status-text" id="statusText">Ready</div>
+    </div>
+    <div class="threshold-control">
+      <label>Threshold</label>
+      <input type="range" min="0.2" max="0.9" step="0.05" value="0.45" id="threshSlider"
+             oninput="setThreshold(this.value)">
+      <div class="threshold-val" id="threshVal">0.45</div>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- LEFT -->
+  <div class="viz-panel">
+    <div class="detection-hero" id="detHero">
+      <div class="det-bg"></div>
+      <div class="det-content">
+        <div class="det-word" id="detWord">Listening</div>
+        <div class="det-conf" id="detConf">Say a keyword to begin</div>
+        <div class="det-meta">
+          <div class="det-meta-item">Latency <span id="metaLat">--</span></div>
+          <div class="det-meta-item">Model <span id="metaModel">--</span></div>
+          <div class="det-meta-item">Energy <span id="metaEnergy">--</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="wave-section">
+      <canvas id="waveCanvas"></canvas>
+    </div>
+
+    <div class="kw-section">
+      <div class="kw-grid" id="kwGrid"></div>
+    </div>
+
+    <div class="mic-row">
+      <button class="btn-mic" id="btnMic" onclick="toggleMic()">&#127908;</button>
+      <div class="mic-label" id="micLabel">Click to start</div>
+    </div>
+  </div>
+
+  <!-- RIGHT SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-header">Probability Distribution</div>
+    <div class="prob-section" id="probBars"></div>
+
+    <div class="energy-meter">
+      <div class="energy-label">Energy</div>
+      <div class="energy-bar-bg"><div class="energy-bar" id="energyBar"></div></div>
+      <div class="energy-val" id="energyVal">-- dB</div>
+    </div>
+
+    <div class="stats-section">
+      <div class="stat-row"><div class="stat-label">Inference</div><div class="stat-val" id="statLat">--</div></div>
+      <div class="stat-row"><div class="stat-label">Detections</div><div class="stat-val" id="statDet">0</div></div>
+      <div class="stat-row"><div class="stat-label">Model</div><div class="stat-val" id="statModel">--</div></div>
+    </div>
+
+    <div class="log-section" id="logSection">
+      <h4>Detection Log</h4>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+const LABELS = ['yes','no','up','down','left','right','on','off','stop','go','silence','unknown'];
+const WS_URL = `ws://${location.host}/ws`;
+let ws, audioCtx, analyser, micStream, animFrame;
+let isListening = false;
+let detCount = 0;
+let currentModel = 'ncssm-20k';
+
+// ── Init ──
+function init() {
+  // Model tabs
+  const models = ['ncssm','ncssm-20k','ds-cnn-s','bc-resnet-1'];
+  const names = {'ncssm':'NC-SSM 7K','ncssm-20k':'NC-SSM 20K','ds-cnn-s':'DS-CNN-S','bc-resnet-1':'BC-ResNet-1'};
+  const tabs = document.getElementById('modelTabs');
+  models.forEach(m => {
+    const btn = document.createElement('button');
+    btn.className = 'model-tab' + (m === currentModel ? ' active' : '');
+    btn.textContent = names[m] || m;
+    btn.onclick = () => switchModel(m);
+    btn.dataset.model = m;
+    tabs.appendChild(btn);
+  });
+
+  // Keyword grid
+  const grid = document.getElementById('kwGrid');
+  LABELS.slice(0,10).forEach(kw => {
+    const chip = document.createElement('div');
+    chip.className = 'kw-chip';
+    chip.id = 'kw-' + kw;
+    chip.textContent = kw.charAt(0).toUpperCase() + kw.slice(1);
+    grid.appendChild(chip);
+  });
+
+  // Probability bars
+  const probSection = document.getElementById('probBars');
+  LABELS.forEach((l, i) => {
+    const row = document.createElement('div');
+    row.className = 'prob-row';
+    row.innerHTML = `
+      <div class="prob-label">${l}</div>
+      <div class="prob-bar-bg"><div class="prob-bar" id="pbar-${i}" style="width:0%"></div></div>
+      <div class="prob-val" id="pval-${i}">0%</div>
+    `;
+    probSection.appendChild(row);
+  });
+
+  // Canvas
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+  drawWave();
+}
+
+// ── Waveform ──
+const waveCanvas = document.getElementById('waveCanvas');
+const wCtx = waveCanvas.getContext('2d');
+
+function resizeCanvas() {
+  waveCanvas.width = waveCanvas.parentElement.clientWidth;
+  waveCanvas.height = waveCanvas.parentElement.clientHeight;
+}
+
+function drawWave() {
+  const W = waveCanvas.width, H = waveCanvas.height;
+  wCtx.fillStyle = '#ffffff';
+  wCtx.fillRect(0, 0, W, H);
+
+  if (analyser && isListening) {
+    // Time domain
+    const buf = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteTimeDomainData(buf);
+
+    wCtx.lineWidth = 1.5;
+    wCtx.strokeStyle = '#0071e3';
+    wCtx.beginPath();
+    const step = W / buf.length;
+    for (let i = 0; i < buf.length; i++) {
+      const y = (buf[i] / 255) * H;
+      i === 0 ? wCtx.moveTo(0, y) : wCtx.lineTo(i * step, y);
+    }
+    wCtx.stroke();
+
+    // Frequency bars (subtle)
+    const freq = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(freq);
+    const barW = W / 80;
+    wCtx.globalAlpha = 0.08;
+    for (let i = 0; i < 80; i++) {
+      const bH = (freq[i * 4] / 255) * H * 0.5;
+      wCtx.fillStyle = '#0071e3';
+      wCtx.fillRect(i * barW + 1, H - bH, barW - 2, bH);
+    }
+    wCtx.globalAlpha = 1;
+  } else {
+    // Idle sine
+    wCtx.strokeStyle = '#e5e5ea';
+    wCtx.lineWidth = 1;
+    wCtx.beginPath();
+    const t = Date.now() / 1500;
+    for (let x = 0; x < W; x++) {
+      const y = H / 2 + Math.sin(x * 0.015 + t) * 8 + Math.sin(x * 0.008 + t * 0.7) * 4;
+      x === 0 ? wCtx.moveTo(x, y) : wCtx.lineTo(x, y);
+    }
+    wCtx.stroke();
+  }
+
+  animFrame = requestAnimationFrame(drawWave);
+}
+
+// ── WebSocket ──
+function connectWS() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => console.log('WS connected');
+  ws.onclose = () => setTimeout(connectWS, 2000);
+  ws.onerror = () => {};
+
+  ws.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+
+    if (d.type === 'models') {
+      // Update available model tabs
+      return;
+    }
+
+    if (d.type === 'started') {
+      document.getElementById('statusDot').classList.add('active');
+      document.getElementById('statusText').textContent = 'Listening';
+      document.getElementById('statModel').textContent = d.model || currentModel;
+      document.getElementById('metaModel').textContent = d.model || currentModel;
+      return;
+    }
+
+    if (d.type === 'stopped') {
+      document.getElementById('statusDot').classList.remove('active');
+      document.getElementById('statusText').textContent = 'Stopped';
+      return;
+    }
+
+    // prediction or detection
+    const label = d.label || 'silence';
+    const conf = d.confidence || 0;
+    const probs = d.probs || [];
+    const latMs = d.latency_ms || 0;
+    const energyDb = d.energy_db || -60;
+    const detected = d.type === 'detection';
+
+    // Detection hero
+    const hero = document.getElementById('detHero');
+    const wordEl = document.getElementById('detWord');
+    const confEl = document.getElementById('detConf');
+
+    if (detected) {
+      hero.classList.add('detected');
+      wordEl.classList.add('active');
+      wordEl.textContent = label.toUpperCase();
+      confEl.classList.add('active');
+      confEl.textContent = `${(conf * 100).toFixed(1)}% confidence`;
+      detCount++;
+      document.getElementById('statDet').textContent = detCount;
+
+      // Highlight chip
+      document.querySelectorAll('.kw-chip').forEach(c => c.classList.remove('detected'));
+      const chip = document.getElementById('kw-' + label);
+      if (chip) chip.classList.add('detected');
+
+      // Log
+      addLog(label, conf, latMs);
+
+      // Reset after 1.5s
+      setTimeout(() => {
+        hero.classList.remove('detected');
+        wordEl.classList.remove('active');
+        confEl.classList.remove('active');
+        wordEl.textContent = 'Listening';
+        confEl.textContent = 'Say a keyword';
+        document.querySelectorAll('.kw-chip').forEach(c => c.classList.remove('detected'));
+      }, 1500);
+    } else if (label !== 'silence' && label !== 'unknown' && conf > 0.2) {
+      wordEl.textContent = label.toUpperCase();
+      wordEl.style.opacity = Math.min(1, conf * 1.5);
+      confEl.textContent = `${(conf * 100).toFixed(1)}%`;
+    }
+
+    // Latency
+    if (latMs > 0) {
+      document.getElementById('metaLat').textContent = latMs.toFixed(1) + 'ms';
+      document.getElementById('statLat').textContent = latMs.toFixed(1) + 'ms';
+    }
+
+    // Energy
+    const eNorm = Math.max(0, Math.min(100, (energyDb + 50) * 2.5));
+    document.getElementById('energyBar').style.width = eNorm + '%';
+    document.getElementById('energyVal').textContent = energyDb.toFixed(0) + ' dB';
+    document.getElementById('metaEnergy').textContent = energyDb.toFixed(0) + 'dB';
+
+    // Probability bars
+    if (probs.length > 0) {
+      const maxIdx = probs.indexOf(Math.max(...probs));
+      probs.forEach((p, i) => {
+        const bar = document.getElementById('pbar-' + i);
+        const val = document.getElementById('pval-' + i);
+        if (bar && val) {
+          const pct = (p * 100);
+          bar.style.width = pct + '%';
+          bar.className = 'prob-bar' + (detected && i === maxIdx ? ' detected' : i === maxIdx ? ' top' : '');
+          val.textContent = pct.toFixed(0) + '%';
+        }
+      });
+    }
+  };
+}
+
+function addLog(kw, conf, lat) {
+  const log = document.getElementById('logSection');
+  const now = new Date().toLocaleTimeString('en', {hour12:false});
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `<span class="log-time">${now}</span><span class="log-kw">${kw.toUpperCase()}</span><span class="log-conf">${(conf*100).toFixed(1)}%</span><span>${lat.toFixed(1)}ms</span>`;
+  log.appendChild(entry);
+  log.scrollTop = log.scrollHeight;
+  // Keep max 20 entries
+  while (log.querySelectorAll('.log-entry').length > 20) {
+    log.querySelector('.log-entry').remove();
+  }
+}
+
+// ── Mic Control ──
+async function toggleMic() {
+  const btn = document.getElementById('btnMic');
+  if (isListening) {
+    isListening = false;
+    btn.classList.remove('active');
+    document.getElementById('micLabel').textContent = 'Click to start';
+    if (micStream) micStream.getTracks().forEach(t => t.stop());
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({action:'stop'}));
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio:{sampleRate:16000,channelCount:1}});
+    micStream = stream;
+    audioCtx = new AudioContext({sampleRate:16000});
+    const source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    source.connect(analyser);
+    isListening = true;
+    btn.classList.add('active');
+    document.getElementById('micLabel').textContent = 'Listening...';
+
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({action:'start', model:currentModel}));
+    }
+  } catch(e) {
+    document.getElementById('micLabel').textContent = 'Mic access denied';
+  }
+}
+
+function switchModel(m) {
+  currentModel = m;
+  document.querySelectorAll('.model-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.model === m);
+  });
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({action:'switch_model', model:m}));
+  }
+  document.getElementById('statModel').textContent = m;
+  document.getElementById('metaModel').textContent = m;
+}
+
+function setThreshold(v) {
+  document.getElementById('threshVal').textContent = parseFloat(v).toFixed(2);
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({action:'set_threshold', value:parseFloat(v)}));
+  }
+}
+
+// ── Boot ──
+init();
+connectWS();
+</script>
+</body>
+</html>
