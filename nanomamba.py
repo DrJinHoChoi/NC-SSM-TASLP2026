@@ -252,7 +252,7 @@ class PCEN(nn.Module):
 
         # IIR smoothing of energy envelope (AGC)
         # s may be (1, M, 1) [no snr_mel] or (B, M, T) [with snr_mel]
-        B, M, T = mel.shape
+        B_sz, M, T = mel.shape
         smoother = mel[:, :, :1]  # Initialize with first frame
         per_frame_s = (s.dim() == 3 and s.size(-1) > 1)
 
@@ -1549,11 +1549,9 @@ class SelectivityModulatedSSM(SpectralAwareSSM_v2):
         for t in range(L):
             h = (dA[:, t] * h + dBx[:, t] +
                  adaptive_eps[:, t].unsqueeze(-1) * x[:, t].unsqueeze(-1))
-            # NaN safety: clamp hidden state to prevent accumulation overflow
             h = h.clamp(-1e4, 1e4)
             y[:, t] = (h * C_param[:, t].unsqueeze(1)).sum(-1) + self.D * x[:, t]
 
-        # NaN safety: replace any residual NaN in output
         y = torch.nan_to_num(y, nan=0.0, posinf=1e4, neginf=-1e4)
         return y
 
@@ -1875,14 +1873,9 @@ class NoiseCondSMSSM(SelectivityModulatedSSM):
             # State input: dBx + adaptive epsilon rescue term
             state_input = (dBx[:, t] +
                            adaptive_eps[:, t].unsqueeze(-1) * x[:, t].unsqueeze(-1))
-            # ★ Phase 3A fix: gate state INPUT (not output) to prevent noise
-            #   accumulation in higher-order states at low SNR.
-            #   Before: noise accumulated freely in h, then 97% discarded at output.
-            #   Now: noise entry blocked at source → higher states stay near 0.
             if state_gate is not None:
                 state_input = state_input * state_gate.unsqueeze(1)
             h = dA[:, t] * h + state_input
-            # NaN safety: clamp hidden state to prevent accumulation overflow
             h = h.clamp(-1e4, 1e4)
             y[:, t] = (h * C_param[:, t].unsqueeze(1)).sum(-1) + self.D * x[:, t]
 
@@ -1890,7 +1883,6 @@ class NoiseCondSMSSM(SelectivityModulatedSSM):
         y = torch.nan_to_num(y, nan=0.0, posinf=1e4, neginf=-1e4)
 
         # Cache diagnostic: hidden state variance per state dimension
-        # h shape: (B, D, N) — final hidden state after full sequence
         self._last_h_var = (h.detach() ** 2).mean(dim=(0, 1))  # (N,) per-state mean ||h||²
         self._last_h_norm = h.detach().norm(dim=1).mean(dim=0)  # (N,) per-state ||h|| mean
         self._last_y_var = (y.detach() ** 2).mean()  # scalar: output variance
@@ -4337,6 +4329,245 @@ def create_nanomamba_nc_20k(n_classes=12):
         d_model=37, d_state=10, d_conv=3, expand=1.5,
         n_layers=2, use_dual_pcen_v2=True,
         use_ssm_v2=True, use_nc_ssm=True, use_lsg=True)
+
+
+# ============================================================================
+# NC-TCN: Noise-Conditional Temporal Convolutional Network
+# ============================================================================
+# Replaces SSM sequential scan with dilated causal Conv1D.
+# Same NC frontend (STFT → SNR → Mel → SpectralGate → DualPCEN → InstanceNorm)
+# but backend is fully parallelizable, INT8-friendly, SIMD-optimized.
+# ============================================================================
+
+class DilatedTCNBlock(nn.Module):
+    """Single dilated causal Conv1D block with gating.
+
+    Structure:
+        LayerNorm → in_proj → split [x_branch, z_gate]
+        → DWConv1d(causal, dilated) → SiLU
+        → Gate: y * SiLU(z) → out_proj + Residual
+
+    Channel mixing is handled by in_proj (d_model→d_inner) and
+    out_proj (d_inner→d_model), matching Mamba's architecture.
+    No pointwise conv needed — keeps param count low.
+
+    All operations are parallelizable and INT8-friendly.
+    No sequential scan — pure convolution.
+    """
+
+    def __init__(self, d_model, d_conv=3, expand=1.5, dilation=1):
+        super().__init__()
+        self.d_model = d_model
+        self.d_inner = int(d_model * expand)
+        self.dilation = dilation
+
+        self.norm = nn.LayerNorm(d_model)
+
+        # Input projection: (d_model) -> (2 * d_inner) for [x_branch, z_gate]
+        self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=False)
+
+        # Causal dilated depthwise conv
+        # Padding = (kernel_size - 1) * dilation for causal (left-padding)
+        self.causal_pad = (d_conv - 1) * dilation
+        self.dwconv = nn.Conv1d(
+            self.d_inner, self.d_inner,
+            kernel_size=d_conv, dilation=dilation,
+            padding=0,  # manual causal padding
+            groups=self.d_inner)
+
+        # Output projection
+        self.out_proj = nn.Linear(self.d_inner, d_model, bias=False)
+
+    def forward(self, x, snr_mel=None, pcen_gate=None, snr_hint=None):
+        """
+        Args:
+            x: (B, L, d_model) - input sequence
+            snr_mel: ignored (kept for API compatibility with NanoMambaBlock)
+            pcen_gate: ignored
+            snr_hint: ignored
+        Returns:
+            out: (B, L, d_model) - output with residual
+        """
+        residual = x
+        x = self.norm(x)
+
+        # Project and split
+        xz = self.in_proj(x)  # (B, L, 2*d_inner)
+        x_branch, z = xz.chunk(2, dim=-1)
+
+        # Causal dilated depthwise conv
+        x_branch = x_branch.transpose(1, 2)  # (B, d_inner, L)
+        # Left-pad for causal convolution
+        x_branch = F.pad(x_branch, (self.causal_pad, 0))
+        x_branch = self.dwconv(x_branch)  # (B, d_inner, L)
+        x_branch = F.silu(x_branch)
+        x_branch = x_branch.transpose(1, 2)  # (B, L, d_inner)
+
+        # Gate with z branch (same as Mamba)
+        y = x_branch * F.silu(z)
+
+        # Output projection + residual
+        out = self.out_proj(y) + residual
+        out = torch.nan_to_num(out, nan=0.0, posinf=1e4, neginf=-1e4)
+        return out
+
+
+class NanoTCN(nn.Module):
+    """NC-TCN: Noise-Conditional Temporal Convolutional Network.
+
+    Same NC frontend as NanoMamba (STFT → SNR → SpectralGate → DualPCEN → InstanceNorm)
+    but replaces SSM blocks with dilated causal TCN blocks.
+
+    Advantages over SSM:
+      - Fully parallelizable (no sequential scan)
+      - INT8/INT4 quantization-friendly (no recurrence error accumulation)
+      - SIMD-optimized on all platforms (Conv1D → vectorized)
+      - Same noise robustness (from NC frontend, not backend)
+
+    Architecture:
+      Raw Audio → STFT → SNR → Mel → SpectralGate → DualPCEN → InstanceNorm
+      → PatchProj → N × DilatedTCNBlock(dilation=1,2,4,...) → LayerNorm → GAP → Classifier
+    """
+
+    def __init__(self, n_mels=40, n_classes=12,
+                 d_model=37, d_conv=3, expand=1.5,
+                 n_layers=4, dilations=None,
+                 sr=16000, n_fft=512, hop_length=160,
+                 use_dual_pcen_v2=True, use_lsg=True):
+        super().__init__()
+        self.n_mels = n_mels
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.sr = sr
+        self.d_model = d_model
+        self.use_dual_pcen = use_dual_pcen_v2
+        self.use_lsg = use_lsg
+
+        n_freq = n_fft // 2 + 1
+
+        # === NC Frontend (identical to NanoMamba) ===
+
+        # 1. SNR Estimator
+        self.snr_estimator = SNREstimator(
+            n_freq=n_freq, use_running_ema=use_dual_pcen_v2)
+
+        # 2. Learned Spectral Gate
+        if use_lsg:
+            self.spectral_gate = LearnedSpectralGate(n_mels=n_mels)
+
+        # 3. DualPCEN v2
+        if use_dual_pcen_v2:
+            self.dual_pcen = DualPCEN_v2(n_mels=n_mels)
+            self.freq_dep_floor = FrequencyDependentFloor(n_mels=n_mels)
+
+        # 4. Mel filterbank (fixed)
+        mel_fb = NanoMamba._create_mel_fb(sr, n_fft, n_mels)
+        self.register_buffer('mel_fb', torch.from_numpy(mel_fb))
+
+        # 5. Instance normalization
+        self.input_norm = nn.InstanceNorm1d(n_mels)
+
+        # === TCN Backend (replaces SSM) ===
+
+        # Patch projection
+        self.patch_proj = nn.Linear(n_mels, d_model)
+
+        # Dilated TCN blocks
+        if dilations is None:
+            # Default: exponential dilation 1,2,4,... covers 100 frames
+            dilations = [2**i for i in range(n_layers)]
+        self.blocks = nn.ModuleList([
+            DilatedTCNBlock(
+                d_model=d_model, d_conv=d_conv,
+                expand=expand, dilation=d)
+            for d in dilations
+        ])
+
+        # Final norm + classifier
+        self.final_norm = nn.LayerNorm(d_model)
+        self.classifier = nn.Linear(d_model, n_classes)
+
+    def extract_features(self, audio):
+        """Extract mel features and SNR (identical to NanoMamba)."""
+        window = torch.hann_window(self.n_fft, device=audio.device)
+        spec = torch.stft(audio, self.n_fft, self.hop_length,
+                          window=window, return_complex=True)
+        mag = spec.abs()
+
+        snr_mel = self.snr_estimator(mag, self.mel_fb)
+        mel = torch.matmul(self.mel_fb, mag)
+
+        if self.use_lsg:
+            mel = self.spectral_gate(mel, snr_mel)
+
+        if self.use_dual_pcen:
+            mel = self.freq_dep_floor(mel)
+            mel = self.dual_pcen(mel, snr_mel=snr_mel)
+        else:
+            mel = torch.log(mel + 1e-8)
+
+        mel = self.input_norm(mel)
+
+        if torch.isnan(mel).any():
+            mel = torch.nan_to_num(mel, nan=0.0)
+
+        return mel, snr_mel
+
+    def forward(self, audio, snr_hint=None):
+        """
+        Args:
+            audio: (B, T) raw waveform at 16kHz
+        Returns:
+            logits: (B, n_classes)
+        """
+        mel, snr_mel = self.extract_features(audio)
+
+        # (B, n_mels, T) → (B, T, n_mels)
+        x = mel.transpose(1, 2)
+
+        # Patch projection
+        x = self.patch_proj(x)  # (B, T, d_model)
+
+        # TCN blocks (fully parallel!)
+        for block in self.blocks:
+            x = block(x)
+
+        # Final norm + GAP + classify
+        x = self.final_norm(x)
+        x = x.mean(dim=1)
+        return self.classifier(x)
+
+
+def create_nc_tcn_20k(n_classes=12):
+    """NC-TCN-20K: Noise-Conditional TCN with ~20K params.
+
+    Same NC frontend as NC-SSM-20K, but TCN backend:
+      - 3 dilated causal Conv1D blocks (dilation=1, 2, 4)
+      - Receptive field: 1 + (3-1)*(1+2+4) = 15 frames (~240ms)
+      - Sufficient for KWS keywords (100-300ms phoneme patterns)
+      - Fully parallelizable, INT8-friendly, SIMD-optimized
+
+    d_model=37, expand=1.5 (d_inner=55), 3 layers (~20K params)
+    Channel mixing via in_proj/out_proj (like Mamba), no pw_conv.
+    """
+    return NanoTCN(
+        n_mels=40, n_classes=n_classes,
+        d_model=37, d_conv=3, expand=1.5,
+        n_layers=3, dilations=[1, 2, 4],
+        use_dual_pcen_v2=True, use_lsg=True)
+
+
+def create_nc_tcn_matched(n_classes=12):
+    """NC-TCN-Matched: Parameter-matched to NC-SSM base (7.4K params).
+
+    Minimal TCN for direct comparison with NC-SSM base.
+    d_model=20, 3 layers with dilation 1,2,4.
+    """
+    return NanoTCN(
+        n_mels=40, n_classes=n_classes,
+        d_model=20, d_conv=3, expand=1.5,
+        n_layers=3, dilations=[1, 2, 4],
+        use_dual_pcen_v2=True, use_lsg=True)
 
 
 def create_nanomamba_nc_20k_ss(n_classes=12):

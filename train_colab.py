@@ -122,6 +122,9 @@ try:
         create_nanomamba_nc_20k_ss,
         create_nanomamba_nc_15k_ss,
         create_nanomamba_nc_12k_ss,
+        # NC-TCN: Noise-Conditional TCN (SSM → dilated Conv1D)
+        create_nc_tcn_20k,
+        create_nc_tcn_matched,
         profile_model, profile_all_models,
     )
     print("  [OK] nanomamba.py loaded successfully")
@@ -3433,6 +3436,9 @@ MODEL_REGISTRY = {
     'NanoMamba-NC-20K-SS': create_nanomamba_nc_20k_ss,
     'NanoMamba-NC-15K-SS': create_nanomamba_nc_15k_ss,
     'NanoMamba-NC-12K-SS': create_nanomamba_nc_12k_ss,
+    # NC-TCN: Noise-Conditional TCN (Conv1D replaces SSM scan)
+    'NC-TCN-20K': create_nc_tcn_20k,
+    'NC-TCN-Matched': create_nc_tcn_matched,
     'DS-CNN-S': lambda n=12: DSCNN_S(n_classes=n),
     'BC-ResNet-1': lambda n=12: BCResNet(n_classes=n, scale=1),
 }
