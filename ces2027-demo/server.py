@@ -30,6 +30,8 @@ sys.path.insert(0, PARENT)
 
 import nano_ssm
 from nano_ssm.streaming import StreamingEngine
+from nanomamba import create_nc_tcn_20k, NanoTCN
+from train_colab import spectral_subtraction_v2
 
 # ── Config ──
 SR = 16000
@@ -174,6 +176,90 @@ class SimpleEngine:
         self.chunks_since = self.cooldown_chunks
 
 
+# ── NC-TCN+SS Streaming Engine ──
+class NanoTCNSSEngine:
+    """NC-TCN-20K + External Spectral Subtraction streaming engine.
+    1-second buffer → SS → NanoTCN → classify.
+    """
+    def __init__(self, model, sr=16000, threshold=0.45, cooldown_chunks=6,
+                 ss_bypass_threshold_db=-5.0):
+        self.model = model
+        self.sr = sr
+        self.confidence_threshold = threshold
+        self.cooldown_chunks = cooldown_chunks
+        self.ss_bypass_threshold_db = ss_bypass_threshold_db
+        self.labels = GSC_LABELS
+        self.buffer = torch.zeros(0)
+        self.chunks_since = cooldown_chunks
+
+    @torch.no_grad()
+    def feed(self, chunk):
+        if chunk.dim() == 2:
+            chunk = chunk.squeeze(0)
+        self.buffer = torch.cat([self.buffer, chunk])
+        if len(self.buffer) > self.sr * 3:
+            self.buffer = self.buffer[-self.sr * 3:]
+        self.chunks_since += 1
+
+        audio_np = chunk.numpy()
+        rms = np.sqrt(np.mean(audio_np ** 2))
+        energy_db = 20 * np.log10(max(rms, 1e-10))
+
+        result = {
+            'label': 'silence', 'confidence': 0.0,
+            'smoothed_label': 'silence', 'smoothed_confidence': 0.0,
+            'raw_probs': np.zeros(len(self.labels)),
+            'energy_db': energy_db, 'detected': False,
+        }
+
+        if len(self.buffer) < self.sr:
+            return None
+
+        # Latest 1s audio
+        audio = self.buffer[-self.sr:].unsqueeze(0)  # (1, 16000)
+
+        # External SS with hard bypass (threshold = -5dB)
+        rms_full = audio.pow(2).mean().sqrt()
+        snr_est_db = 20 * np.log10(max(float(rms_full), 1e-10)) + 30  # rough SNR
+        if snr_est_db < self.ss_bypass_threshold_db:
+            # Apply spectral subtraction for noisy audio
+            try:
+                audio_ss = spectral_subtraction_v2(audio)
+                audio = audio_ss
+            except Exception:
+                pass
+
+        # Forward through NanoTCN (raw audio → internal STFT/mel/etc.)
+        logits = self.model(audio)
+        probs = torch.softmax(logits, dim=-1)[0].cpu().numpy()
+
+        idx = int(np.argmax(probs))
+        label = self.labels[idx]
+        conf = float(probs[idx])
+
+        result['label'] = label
+        result['confidence'] = conf
+        result['smoothed_label'] = label
+        result['smoothed_confidence'] = conf
+        result['raw_probs'] = probs
+
+        if (label not in ('silence', 'unknown') and
+                conf >= self.confidence_threshold and
+                self.chunks_since >= self.cooldown_chunks):
+            result['detected'] = True
+            self.chunks_since = 0
+
+        return result
+
+    @property
+    def buffer_duration_ms(self):
+        return len(self.buffer) / self.sr * 1000
+
+    def reset(self):
+        self.buffer = torch.zeros(0)
+        self.chunks_since = self.cooldown_chunks
+
+
 # ── Load models ──
 def load_models():
     print("\n  Loading models...")
@@ -193,6 +279,25 @@ def load_models():
             print(f"    {key}: {m.n_params:,} params OK")
         except Exception as e:
             print(f"    {key}: FAIL ({e})")
+
+    # NC-TCN-20K + external SS
+    try:
+        tcn_ckpt_path = os.path.join(CKPT_DIR, 'NC-TCN-20K', 'best.pt')
+        if os.path.exists(tcn_ckpt_path):
+            m = create_nc_tcn_20k(n_classes=12)
+            ckpt = torch.load(tcn_ckpt_path, map_location='cpu', weights_only=False)
+            if 'model_state_dict' in ckpt:
+                m.load_state_dict(ckpt['model_state_dict'])
+            else:
+                m.load_state_dict(ckpt)
+            m.eval()
+            n_params = sum(p.numel() for p in m.parameters())
+            models['nc-tcn-20k-ss'] = ('nctcn-ss', m)
+            print(f"    nc-tcn-20k-ss: {n_params:,} params (+ext SS) OK")
+        else:
+            print(f"    nc-tcn-20k-ss: SKIP (no checkpoint at {tcn_ckpt_path})")
+    except Exception as e:
+        print(f"    nc-tcn-20k-ss: FAIL ({e})")
 
     # CNN models via train_colab.py
     try:
@@ -303,6 +408,13 @@ def create_engine(model_key):
             confidence_threshold=state['threshold'],
             cooldown_chunks=6,
         )
+    elif model_type == 'nctcn-ss':
+        return NanoTCNSSEngine(
+            wrapper, sr=SR,
+            threshold=state['threshold'],
+            cooldown_chunks=6,
+            ss_bypass_threshold_db=-5.0,
+        )
     else:
         return SimpleEngine(
             wrapper, sr=SR,
@@ -326,11 +438,40 @@ def start_listening():
         try: audio_queue.get_nowait()
         except: break
 
-    state['stream'] = sd.InputStream(
-        samplerate=SR, channels=1, dtype='float32',
-        blocksize=CHUNK_SAMPLES, callback=audio_callback,
-    )
-    state['stream'].start()
+    # Try to open audio — fallback through devices if needed
+    import scipy.signal as sig
+
+    def try_mic(device=None):
+        dev_info = sd.query_devices(device if device is not None else sd.default.device[0])
+        native_sr = int(dev_info['default_samplerate'])
+        if native_sr == SR:
+            s = sd.InputStream(samplerate=SR, channels=1, dtype='float32',
+                               blocksize=CHUNK_SAMPLES, callback=audio_callback, device=device)
+            s.start()
+            print(f"  Mic [{device}] {dev_info['name']} @ {SR}Hz", flush=True)
+            return s
+        native_block = int(native_sr * CHUNK_MS / 1000)
+        def resample_cb(indata, frames, ti, status):
+            audio = indata[:, 0].astype(np.float32)
+            resampled = sig.resample(audio, int(len(audio) * SR / native_sr)).astype(np.float32)
+            audio_queue.put(resampled)
+        s = sd.InputStream(samplerate=native_sr, channels=1, dtype='float32',
+                           blocksize=native_block, callback=resample_cb, device=device)
+        s.start()
+        print(f"  Mic [{device}] {dev_info['name']} @ {native_sr}Hz -> {SR}Hz", flush=True)
+        return s
+
+    stream = None
+    for dev_id in [34, None, 31, 20, 21]:
+        try:
+            stream = try_mic(dev_id)
+            break
+        except Exception:
+            continue
+    if stream is None:
+        print("  [ERR] No working mic found", flush=True)
+        return
+    state['stream'] = stream
     state['is_listening'] = True
 
     state['thread'] = threading.Thread(target=process_loop, daemon=True)
