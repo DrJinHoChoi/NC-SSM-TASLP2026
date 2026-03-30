@@ -136,78 +136,71 @@ class SNREstimator(nn.Module):
 # ============================================================================
 
 class LearnedSpectralSubtraction(nn.Module):
-    """SNR-adaptive spectral subtraction integrated into the NC pipeline.
+    """Learnable subtractive spectral denoising integrated into NC pipeline.
 
-    Operates in STFT magnitude domain BEFORE mel projection, using the
-    noise floor from SNR Estimator. Unlike external SS preprocessing,
-    this is end-to-end trainable and SNR-adaptive:
+    Unlike Wiener-gain (multiplicative), this directly SUBTRACTS noise
+    energy — identical to classical SS but end-to-end learnable:
 
-      High SNR (clean): gain ≈ 1 → pass through (no artifacts)
-      Low  SNR (noisy): gain ≈ Wiener gain → suppress noise
+      |Ŝ_f,t|² = max(|X_f,t|² - α·|N̂_f,t|², γ·|X_f,t|²)
 
-    Formula (per frequency bin f, per frame t):
-      SNR_f,t = |X_f,t|² / (|N_f|² + ε)
-      gain_f,t = max(1 - α / SNR_f,t, γ)        ← Wiener-like
-      strength = sigmoid(s · (threshold - snr_global))  ← SNR-adaptive
-      |Y_f,t| = (strength · gain + (1-strength)) · |X_f,t|
+    SNR-adaptive blending preserves clean signals:
+      strength = sigmoid(s · (τ - snr_global))
+      output = strength · |Ŝ| + (1 - strength) · |X|
 
-    At high SNR: strength→0 → |Y|=|X| (identity, zero distortion)
-    At low  SNR: strength→1 → |Y|=gain·|X| (Wiener suppression)
+    Why subtraction > multiplication at -15dB:
+      Multiplicative: mag * 0.1 = 10% noise energy remains
+      Subtractive:    mag² - α·noise² → noise energy REMOVED
 
     Parameters: 4 learnable (α, γ, threshold, scale)
-    Complexity: O(F·T) element-wise ops — negligible vs mel projection
     """
 
     def __init__(self):
         super().__init__()
-        # Oversubtraction factor (init=2.0: moderate)
+        # Oversubtraction factor (init=2.0: moderate, learns to be aggressive)
         self.alpha = nn.Parameter(torch.tensor(2.0))
-        # Spectral floor (prevents musical noise, init=0.1)
-        self.floor = nn.Parameter(torch.tensor(0.1))
-        # SNR-adaptive strength control
-        # threshold: below this SNR, SS is applied (init=0.3 in tanh-normalized)
+        # Spectral floor ratio (prevents musical noise, init=0.02)
+        self.floor = nn.Parameter(torch.tensor(0.02))
+        # SNR-adaptive strength
         self.ss_threshold = nn.Parameter(torch.tensor(0.3))
-        # scale: sigmoid steepness (init=10.0 for sharp transition)
         self.ss_scale = nn.Parameter(torch.tensor(10.0))
 
     def forward(self, mag, noise_floor, snr_mel):
         """
         Args:
-            mag: (B, F, T) STFT magnitude spectrogram
+            mag: (B, F, T) STFT magnitude
             noise_floor: (B, F, T) or (B, F, 1) estimated noise floor
             snr_mel: (B, n_mels, T) mel-band SNR (tanh-normalized, 0~1)
         Returns:
-            enhanced_mag: (B, F, T) SS-enhanced magnitude
+            enhanced_mag: (B, F, T)
         """
         alpha = self.alpha.abs()
         floor = self.floor.abs().clamp(max=0.5)
 
-        # Expand noise_floor if static (B, F, 1) → (B, F, T)
+        # Expand noise_floor if static
         if noise_floor.dim() == 3 and noise_floor.size(2) == 1:
             noise_floor = noise_floor.expand_as(mag)
 
-        # Per-bin Wiener-like gain: gain = max(1 - α·|N|²/|X|², γ)
+        # === Subtractive SS (energy domain) ===
+        # |Ŝ|² = max(|X|² - α·|N̂|², γ·|X|²)
+        signal_power = mag.pow(2)
         noise_power = noise_floor.pow(2)
-        signal_power = mag.pow(2).clamp(min=1e-10)
-        gain = (1.0 - alpha * noise_power / signal_power).clamp(min=floor)
+        subtracted = signal_power - alpha * noise_power
+        floored = floor * signal_power
+        enhanced_power = torch.max(subtracted, floored)
+        enhanced_mag = enhanced_power.clamp(min=1e-10).sqrt()
 
-        # Global SNR for strength control (mean across mel bands)
-        # snr_mel ∈ [0,1] via tanh: 0=very noisy, 1=clean
+        # === SNR-adaptive strength ===
+        # High SNR → strength≈0 → use original (no artifacts)
+        # Low  SNR → strength≈1 → use subtracted (noise removed)
         snr_global = snr_mel.mean(dim=(1, 2))  # (B,)
-
-        # Strength: high when SNR is low (noisy → apply SS)
         strength = torch.sigmoid(
             self.ss_scale.abs() * (self.ss_threshold - snr_global)
-        )  # (B,)
-        strength = strength.view(-1, 1, 1)  # (B, 1, 1) for broadcasting
+        ).view(-1, 1, 1)  # (B, 1, 1)
 
-        # Blend: strength · (gain · mag) + (1-strength) · mag
-        # = mag · (strength · gain + (1-strength))
-        # = mag · (1 - strength · (1-gain))
-        effective_gain = 1.0 - strength * (1.0 - gain)
-        enhanced_mag = mag * effective_gain
+        # Blend: subtract at low SNR, pass-through at high SNR
+        output = strength * enhanced_mag + (1.0 - strength) * mag
 
-        return enhanced_mag
+        return output
 
 
 # ============================================================================
