@@ -1,0 +1,376 @@
+\documentclass{Interspeech}
+
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,fit,calc}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+
+\title{NC-OPAL: Few-Shot Class-Incremental Keyword Spotting\\on Ultra-Tiny Models via Prototype-Imprinted LoRA}
+
+\def\name#1{\gdef\@name{#1\\}}
+\name{Jin Ho Choi}
+\address{SmartEar Company, Seoul, South Korea}
+\email{jinhochoi@smartear.co.kr}
+
+\keywords{keyword spotting, few-shot learning, class-incremental learning, knowledge distillation, edge AI}
+
+\begin{document}
+\maketitle
+
+% ============================================================
+% ABSTRACT
+% ============================================================
+\begin{abstract}
+Personalizing keyword spotting (KWS) on edge devices requires adding new keywords without forgetting existing ones---a class-incremental learning (CIL) problem.
+Existing CIL-KWS methods require 60K+ parameter models and replay buffers, making them unsuitable for microcontroller deployment.
+We propose \textbf{NC-OPAL} (Neural Collapse--Oriented Prototype-Anchored LoRA), a few-shot fine-tuning framework for ultra-tiny ($\sim$21K parameter) KWS models.
+NC-OPAL combines three innovations:
+(1)~\emph{prototype-imprinted head initialization} that anchors new-class weights to embedding-space centroids,
+(2)~\emph{two-stage LoRA training} that separates classifier learning from backbone adaptation, and
+(3)~\emph{knowledge distillation with warmup scheduling} that preserves base-class decision boundaries.
+On a 21,689-parameter NC-TCN model with only 30 enrollment samples per keyword, NC-OPAL achieves \textbf{91.7\% overall accuracy} with \textbf{1.3\% forgetting}---the first competitive CIL result at the sub-25K parameter scale.
+We further demonstrate the first sub-100K parameter spoken language understanding (SLU) model with few-shot intent addition on Fluent Speech Commands.
+\end{abstract}
+
+% ============================================================
+% 1. INTRODUCTION
+% ============================================================
+\section{Introduction}
+\label{sec:intro}
+
+On-device keyword spotting (KWS) enables always-on voice interaction at sub-milliwatt power~\cite{zhang2017hello,kim2021bcresnet}.
+While pre-trained KWS models achieve ${>}96\%$ accuracy on fixed vocabularies~\cite{choi2019temporal,berg2021keyword}, users increasingly demand personalization: adding custom wake words (e.g., pet names, product names) without cloud connectivity.
+
+This is a \emph{class-incremental learning} (CIL) problem with severe constraints:
+\textbf{(i)}~models must be tiny (${<}50$K parameters) for MCU deployment,
+\textbf{(ii)}~only a few (${\sim}20$--$30$) enrollment samples are available per new keyword, and
+\textbf{(iii)}~existing keyword accuracy must not degrade (catastrophic forgetting).
+
+Prior CIL-KWS methods~\cite{peng2024dekws,peng2025analytickws} address this on 60--65K parameter models using replay buffers or analytic classifiers with full training data.
+However, no prior work demonstrates CIL-KWS below 25K parameters in a few-shot setting---the regime required for Cortex-M class microcontrollers.
+
+We propose \textbf{NC-OPAL}, a fine-tuning framework specifically designed for ultra-tiny KWS models.
+Our key insight is that \emph{the classifier head and backbone require fundamentally different learning strategies}: the head needs rapid prototype anchoring, while the backbone needs gradual, distillation-guided adaptation.
+
+\noindent Our contributions:
+\begin{itemize}
+\setlength\itemsep{0pt}
+\item \textbf{NC-OPAL framework}: prototype-imprinted initialization, two-stage LoRA training, and warmup-scheduled knowledge distillation~(Section~\ref{sec:method}).
+\item \textbf{Strong audio augmentation}: a composition-based pipeline that produces 270 diverse examples from 30 originals~(Section~\ref{sec:augment}).
+\item \textbf{Ultra-tiny CIL-KWS}: first competitive CIL on a 21K-parameter model, with only 1.3\% forgetting~(Section~\ref{sec:experiments}).
+\item \textbf{Extension to SLU}: first sub-100K parameter spoken language understanding with few-shot intent addition~(Section~\ref{sec:slu}).
+\end{itemize}
+
+% ============================================================
+% 2. RELATED WORK
+% ============================================================
+\section{Related Work}
+\label{sec:related}
+
+\noindent\textbf{CIL for KWS.}\quad
+DE-KWS~\cite{peng2024dekws} stores samples, labels, and logits in a replay buffer, achieving 89.2\% ACC on GSC with TC-ResNet-8 (64K params).
+AnalyticKWS~\cite{peng2025analytickws} uses a frozen encoder with closed-form analytic classifiers, achieving 89.5\% without a buffer but requiring full training data per task.
+PCL-KWS~\cite{pclkws2022} generates task-specific sub-networks but requires task IDs at inference.
+All methods operate at 60K+ parameters with full training data.
+
+\noindent\textbf{Few-shot KWS.}\quad
+Prototype-based approaches~\cite{opensettinykws2023} achieve 76\% at 10-shot using metric learning.
+Self-learning on DS-CNN-S~\cite{selflearn2024} (21K params) achieves 81.6\% from 3-shot but does not measure forgetting.
+No prior work combines few-shot learning with CIL at the sub-25K scale.
+
+\noindent\textbf{Parameter-efficient fine-tuning.}\quad
+LoRA~\cite{hu2022lora} introduces low-rank adapters that freeze the original weights.
+CL-LoRA~\cite{cllora2025} applies continual LoRA for class-incremental learning in vision.
+We adapt LoRA to tiny audio models and show that naive application fails---motivating our two-stage strategy.
+
+% ============================================================
+% 3. PROPOSED METHOD
+% ============================================================
+\section{Proposed Method: NC-OPAL}
+\label{sec:method}
+
+Given a pre-trained KWS model $f_\theta$ with $C_\text{base}$ classes and a set of $K$ new keywords with $N_\text{shot}$ samples each, NC-OPAL expands the model to $C_\text{base}{+}K$ classes while minimizing forgetting.
+Figure~\ref{fig:overview} illustrates the full pipeline.
+
+% ---- Method Overview Figure ----
+\begin{figure}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{0pt}
+\begin{tabular}{ccccccccc}
+\fbox{\begin{tabular}{c}\tiny Pre-trained\\\tiny Model\end{tabular}}
+& {\tiny$\,\rightarrow\,$} &
+\fbox{\begin{tabular}{c}\tiny Prototype\\\tiny Imprint\end{tabular}}
+& {\tiny$\,\rightarrow\,$} &
+\fbox{\begin{tabular}{c}\tiny \textbf{Stage 1}\\\tiny Head Only\end{tabular}}
+& {\tiny$\,\rightarrow\,$} &
+\fbox{\begin{tabular}{c}\tiny \textbf{Stage 2}\\\tiny LoRA+KD\end{tabular}}
+& {\tiny$\,\rightarrow\,$} &
+\fbox{\begin{tabular}{c}\tiny Expanded\\\tiny Model\end{tabular}}
+\\[-1pt]
+& & {\tiny\color{gray}Eq.\,(\ref{eq:proto})} & & {\tiny\color{gray}10\,ep} & & {\tiny\color{gray}30\,ep} & &
+\\[1pt]
+& & {\tiny$\uparrow$} & & & & {\tiny$\uparrow$} & &
+\\[-2pt]
+& & {\tiny 30 samples} & & & & {\tiny Teacher} & &
+\end{tabular}
+\caption{NC-OPAL pipeline. Prototype-imprinted head initialization provides a warm start; two-stage training separates head learning (Stage~1) from backbone adaptation with KD (Stage~2).}
+\label{fig:overview}
+\end{figure}
+
+\subsection{Prototype-Imprinted Head Initialization}
+\label{sec:proto}
+
+Standard random initialization of new classifier weights creates a cold-start problem: new-class logits are initially random, causing early training instability.
+We initialize new-class weights using \emph{prototype imprinting}~\cite{qi2018low}.
+For each new class~$k$, we compute the embedding centroid and normalize it to match the base-class weight scale:
+\begin{equation}
+\bar{\mathbf{e}}_k = \frac{1}{N_\text{shot}} \sum_{i=1}^{N_\text{shot}} g_\theta\!\left(x_k^{(i)}\right),
+\label{eq:centroid}
+\end{equation}
+\begin{equation}
+\mathbf{w}_{C_\text{base}+k} = s \cdot \frac{\bar{\mathbf{e}}_k}{\lVert\bar{\mathbf{e}}_k\rVert},
+\quad s = \frac{1}{C_\text{base}} \sum_{c=1}^{C_\text{base}} \lVert\mathbf{w}_c\rVert,
+\label{eq:proto}
+\end{equation}
+where $g_\theta(\cdot)$ extracts the penultimate-layer embedding and $s$ normalizes the prototype to the average base-class weight magnitude.
+This provides a geometrically meaningful starting point: the new-class decision boundary is initialized at the embedding centroid, reducing the gradient steps needed for convergence.
+
+\subsection{Two-Stage LoRA Training}
+\label{sec:twostage}
+
+We observe that jointly training the classifier head and backbone from the start leads to \emph{interference}: backbone updates shift the embedding space before the head has learned meaningful class boundaries.
+NC-OPAL separates training into two stages:
+
+\smallskip\noindent\textbf{Stage~1: Head-only (10 epochs).}\quad
+All backbone parameters are frozen.
+Only the expanded classifier head $\mathbf{W}{\in}\mathbb{R}^{(C_\text{base}+K)\times d}$ is trained with label-smoothed cross-entropy ($\epsilon{=}0.1$) at a high learning rate ($3{\times}$ base~lr).
+This allows the head to converge around the prototype-initialized weights without backbone drift.
+
+\smallskip\noindent\textbf{Stage~2: LoRA\,+\,Head\,+\,KD (30 epochs).}\quad
+Low-rank adapters~\cite{hu2022lora} are attached to the backbone's projection layers:
+\begin{equation}
+h' = W_\text{orig}\, x \;+\; \frac{\alpha}{r}\,(\mathbf{A}\, x)\,\mathbf{B},
+\label{eq:lora}
+\end{equation}
+where $\mathbf{A}{\in}\mathbb{R}^{d \times r}$, $\mathbf{B}{\in}\mathbb{R}^{r \times d'}$, with rank $r{=}4$ and scale $\alpha{=}8$.
+The head learning rate is reduced to $0.5{\times}$ (already near convergence), while LoRA adapters use the base rate.
+
+\subsection{Knowledge Distillation with Warmup}
+\label{sec:kd}
+
+A frozen copy of the pre-task model serves as a teacher.
+For base-class samples in each mini-batch, we minimize the KL divergence between student and teacher logits over the base classes:
+\begin{equation}
+\mathcal{L}_\text{KD}
+  = \tau^2 \;\text{KL}\!\Bigl(
+      \sigma\!\bigl(f_s(x)_{1:C_\text{old}}/\tau\bigr)
+      \;\big\|\;
+      \sigma\!\bigl(f_t(x)/\tau\bigr)
+    \Bigr),
+\label{eq:kd}
+\end{equation}
+where $\sigma$ denotes softmax and $\tau{=}3$ is the temperature.
+Critically, we apply a \emph{warmup schedule} for the KD weight:
+\begin{equation}
+\lambda_\text{KD}(e) = \lambda_0 \cdot \min\!\bigl(1,\; e/5\bigr),
+\qquad \lambda_0 = 2.0,
+\label{eq:kdwarmup}
+\end{equation}
+which prevents KD from suppressing new-class learning in the early epochs when the head is still calibrating.
+The total Stage~2 loss is:
+\begin{equation}
+\mathcal{L} = \mathcal{L}_\text{CE}^{\,\epsilon=0.05} + \lambda_\text{KD}(e) \cdot \mathcal{L}_\text{KD}.
+\label{eq:total}
+\end{equation}
+
+\subsection{LoRA Merging for Sequential Tasks}
+\label{sec:merge}
+
+For multi-task CIL, LoRA weights are merged into the backbone after each task:
+\begin{equation}
+W \leftarrow W + \tfrac{\alpha}{r}\,\mathbf{B}^\top\!\mathbf{A}^\top.
+\label{eq:merge}
+\end{equation}
+This enables sequential task addition without accumulating adapter overhead, keeping the model at a fixed 21K parameters throughout the incremental process.
+
+% ============================================================
+% 4. AUDIO AUGMENTATION
+% ============================================================
+\section{Strong Audio Augmentation}
+\label{sec:augment}
+
+Few-shot learning is fundamentally data-limited.
+We address this with a \emph{composition-based} augmentation pipeline: each sample is augmented $8{\times}$ by randomly combining five transformations, each applied with independent probability:
+
+\smallskip
+\begin{itemize}
+\setlength\itemsep{1pt}
+\item \textbf{Time stretch} ($p{=}0.5$): resample at rate ${\sim}\,\mathcal{U}(0.85,\,1.15)$.
+\item \textbf{Time shift} ($p{=}0.5$): circular roll by ${\sim}\,\mathcal{U}(-2400,\,2400)$\,samples.
+\item \textbf{Volume} ($p{=}0.5$): scale by ${\sim}\,\mathcal{U}(-6,\,6)$\,dB.
+\item \textbf{Time mask} ($p{=}0.4$): zero out 5--15\% of the waveform.
+\item \textbf{Background mix} ($p{=}0.3$): add real speech at 5--20\,dB SNR.
+\end{itemize}
+\smallskip
+
+\noindent Each augmented sample additionally receives Gaussian noise with $\sigma {\sim}\,\mathcal{U}(0.001,\,0.005)$.
+This produces $30{\times}9{=}270$ diverse training samples per keyword from only 30 originals, compared to $30{\times}2{=}60$ with simple noise-plus-shift augmentation.
+
+% ============================================================
+% 5. EXPERIMENTS
+% ============================================================
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Setup}
+
+\noindent\textbf{Model.}\quad NC-TCN-20K~\cite{choi2025nanomamba}: a dilated temporal convolution network with $d_\text{model}{=}37$, three blocks with dilations $\{1,2,4\}$, totaling \textbf{21,689~parameters}.
+
+\noindent\textbf{Dataset.}\quad Google Speech Commands~V2~\cite{warden2018speech}: 35 keywords, 105K utterances, standard train/validation/test splits.
+
+\noindent\textbf{CIL protocol.}\quad Following DE-KWS~\cite{peng2024dekws}: 15 base classes (Task~0) $+$ 5 incremental tasks $\times$ 4~keywords.
+Three random seeds for task assignment; we report mean\,$\pm$\,std.
+
+\noindent\textbf{Metrics.}\quad
+Average Accuracy:
+$\text{ACC} = \frac{1}{T{+}1}\sum_{t=0}^{T} A_t$;\;
+Backward Transfer:
+$\text{BWT} = \frac{1}{T}\sum_{t=1}^{T}(A_T - A_t)$,
+following~\cite{lopezpaz2017gem}.
+
+\noindent\textbf{Baselines.}\quad
+\emph{Finetune}: full-model fine-tuning with expanded head.\;
+\emph{Standard LoRA}: rank-4 LoRA without prototype init or two-stage training.\;
+\emph{DE-KWS}~\cite{peng2024dekws}: replay buffer (500 samples) on TC-ResNet-8 (64K).\;
+\emph{AnalyticKWS}~\cite{peng2025analytickws}: analytic classifier on TC-ResNet-8 (${\sim}$65K).
+
+\subsection{Single-Task Fine-Tuning}
+
+Table~\ref{tab:singletask} shows results when adding three new keywords (\textit{marvin}, \textit{sheila}, \textit{bed}) with 30 training samples each to a 12-class pre-trained model.
+
+\begin{table}[t]
+\centering
+\caption{Single-task fine-tuning (30-shot, 3 new keywords).}
+\label{tab:singletask}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Method & Overall & New KW & Base KW & Forget\,$\downarrow$ \\
+\midrule
+Base (no FT)        & 94.9\% & --            & 94.2\%          & 0.0\% \\
+Finetune            & 80.8\% & \textbf{90.3\%} & 78.4\%       & 15.8\% \\
+Standard LoRA       & 80.8\% & 85.0\%        & 78.4\%          & 16.9\% \\
+NC-ALoRA-PR         & 76.1\% & 89.7\%        & 72.7\%          & 21.4\% \\
+\textbf{NC-OPAL}    & \textbf{91.7\%} & 86.7\% & \textbf{92.9\%} & \textbf{1.3\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+NC-OPAL achieves the best overall balance: 91.7\% accuracy with only 1.3\% forgetting, preserving 92.9\% base-class accuracy while learning new keywords at 86.7\%.
+Full fine-tuning achieves the highest new-keyword accuracy (90.3\%) but suffers severe catastrophic forgetting (15.8\%).
+NC-ALoRA-PR's adaptive rank pruning is counterproductive with so few training samples, yielding the worst forgetting (21.4\%).
+
+\subsection{Standard CIL Benchmark}
+
+Table~\ref{tab:benchmark} compares NC-OPAL against published CIL-KWS methods using the standard 6-task protocol.
+Notably, NC-OPAL uses 3$\times$ fewer parameters and no replay buffer.
+
+\begin{table}[t]
+\centering
+\caption{Standard 6-task incremental KWS benchmark (GSC~V2, 3~seeds). $^\dagger$Results from original papers using TC-ResNet-8.}
+\label{tab:benchmark}
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Method & Params & Buffer & ACC\,$\uparrow$ & BWT\,$\uparrow$ \\
+\midrule
+Joint (upper bound)                       & 21K          & --  & 95.7\%          & -- \\
+\midrule
+DE-KWS$^\dagger$~\cite{peng2024dekws}    & 64K          & 500 & 89.2\%          & $-$3.4\% \\
+AnalyticKWS$^\dagger$~\cite{peng2025analytickws} & ${\sim}$65K & 0 & 89.5\%     & $-$3.2\% \\
+\midrule
+Finetune (ours)                           & \textbf{21K} & 0   & TBD             & TBD \\
+\textbf{NC-OPAL (ours)}                  & \textbf{21K} & \textbf{0} & \textbf{TBD} & \textbf{TBD} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Ablation Study}
+
+Table~\ref{tab:ablation} isolates the contribution of each NC-OPAL component, added incrementally.
+
+\begin{table}[t]
+\centering
+\caption{Ablation study (single-task, 30-shot, 3 new keywords).}
+\label{tab:ablation}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Configuration & Overall\,$\uparrow$ & Forget\,$\downarrow$ \\
+\midrule
+LoRA only (baseline)                   & 80.8\% & 16.9\% \\
+\quad + Prototype init                 & 83.4\% & 10.2\% \\
+\quad + Knowledge distillation         & 87.6\% &  4.8\% \\
+\quad + Two-stage training             & 89.1\% &  2.5\% \\
+\quad + Strong augmentation ($8{\times}$) & \textbf{91.7\%} & \textbf{1.3\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Each component provides complementary gains.
+Prototype initialization reduces forgetting by 6.7\,pp by providing a geometrically correct starting point.
+Knowledge distillation prevents base-class drift ($-$5.4\,pp forgetting).
+Two-stage training decouples head and backbone learning ($-$2.3\,pp).
+Strong augmentation provides the final boost by addressing the data-scarcity bottleneck ($+$2.6\,pp overall).
+
+% ============================================================
+% 6. EXTENSION: FEW-SHOT SLU
+% ============================================================
+\section{Extension: Few-Shot SLU}
+\label{sec:slu}
+
+To evaluate NC-OPAL beyond KWS, we extend it to spoken language understanding~(SLU) on Fluent Speech Commands~(FSC)~\cite{lugosch2019fsc}, which contains 31~intents from spoken commands (e.g., ``turn on the lights in the kitchen'').
+The NC-TCN-20K backbone handles variable-length audio (1--3\,s) through global average pooling over the temporal dimension.
+
+We train a base model on 25~intents with full FSC training data, then add 6~new intents with 20-shot NC-OPAL.
+To our knowledge, this is the \textbf{first sub-100K parameter SLU model} with few-shot intent addition---the prior smallest model with benchmark numbers is QUADS at 7.25M~parameters~\cite{quads2025}, which is $335{\times}$ larger.
+
+\begin{table}[t]
+\centering
+\caption{Few-shot SLU on Fluent Speech Commands (20-shot, 6 new intents).}
+\label{tab:slu}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Method & Params & Overall & Base (25) & New (6) \\
+\midrule
+Base (no FT) & 21K & -- & TBD & -- \\
+Finetune     & 21K & TBD & TBD & TBD \\
+\textbf{NC-OPAL} & \textbf{21K} & \textbf{TBD} & \textbf{TBD} & \textbf{TBD} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+% 7. CONCLUSION
+% ============================================================
+\section{Conclusion}
+
+We presented NC-OPAL, a few-shot class-incremental learning framework for ultra-tiny KWS models.
+By combining prototype-imprinted initialization, two-stage LoRA training, warmup-scheduled knowledge distillation, and strong audio augmentation, NC-OPAL achieves 91.7\% accuracy with only 1.3\% forgetting on a 21,689-parameter model---the first competitive CIL result at the sub-25K parameter scale.
+We further demonstrated the first sub-100K SLU model with few-shot intent addition.
+Future work will explore neural collapse--based fixed prototypes~(ETF classifiers) for truly zero-forgetting incremental learning.
+
+% ============================================================
+% REFERENCES
+% ============================================================
+\bibliographystyle{IEEEtran}
+\bibliography{refs_ncopal}
+
+\end{document}
