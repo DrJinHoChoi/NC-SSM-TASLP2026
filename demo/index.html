@@ -729,6 +729,62 @@ footer {
       1x
     </button>
   </div>
+
+  <!-- Spatial σ Map + Temporal σ Gate Visualization -->
+  <div style="margin-top:32px;display:flex;gap:24px">
+    <!-- Spatial σ Heatmap -->
+    <div style="flex:1;background:rgba(255,255,255,0.05);border:1px solid #334155;border-radius:12px;padding:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:0.75rem;font-weight:600;color:#60A5FA;text-transform:uppercase;letter-spacing:1px">Spatial &sigma; Map (per-pixel quality)</span>
+        <span style="font-size:0.65rem;color:rgba(255,255,255,0.4)">NC-TCN Vision: dilated 15&times;15 receptive field</span>
+      </div>
+      <div style="display:flex;gap:16px">
+        <!-- Normal σ map -->
+        <div style="flex:1;text-align:center">
+          <canvas id="sigma-map-normal" width="128" height="72" style="width:100%;border-radius:8px;border:1px solid #334155"></canvas>
+          <div style="font-size:0.65rem;color:rgba(255,255,255,0.5);margin-top:4px">Normal: &sigma; &asymp; 1 (all dynamic)</div>
+        </div>
+        <!-- Dark σ map -->
+        <div style="flex:1;text-align:center">
+          <canvas id="sigma-map-dark" width="128" height="72" style="width:100%;border-radius:8px;border:1px solid #334155"></canvas>
+          <div style="font-size:0.65rem;color:rgba(255,255,255,0.5);margin-top:4px">Dark: &sigma; &asymp; 0 (mostly static)</div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:0.6rem;color:rgba(255,255,255,0.3)">
+        <span>&#x1F534; &sigma;&asymp;0 (static/robust)</span>
+        <span>&#x1F7E2; &sigma;&asymp;1 (dynamic/expressive)</span>
+      </div>
+    </div>
+
+    <!-- Temporal σ Gate Timeline -->
+    <div style="flex:1;background:rgba(255,255,255,0.05);border:1px solid #334155;border-radius:12px;padding:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:0.75rem;font-weight:600;color:#A78BFA;text-transform:uppercase;letter-spacing:1px">Temporal &sigma; Gate (per-frame quality)</span>
+        <span style="font-size:0.65rem;color:rgba(255,255,255,0.4)">Bi-NC-SSM: clean &rarr; degraded transfer</span>
+      </div>
+      <!-- 8-frame gate visualization -->
+      <div style="display:flex;gap:4px;align-items:flex-end;height:120px;padding:8px 0">
+        <div id="temporal-gate-bars" style="display:flex;gap:4px;width:100%;align-items:flex-end;height:100%"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:4px">
+        <span style="font-size:0.6rem;color:rgba(255,255,255,0.3)">f0 clean</span>
+        <span style="font-size:0.6rem;color:#F87171">f3 tunnel</span>
+        <span style="font-size:0.6rem;color:rgba(255,255,255,0.3)">f7 clean</span>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <div style="flex:1;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.3);border-radius:8px;padding:8px;text-align:center">
+          <div style="font-size:0.6rem;color:#34D399;font-weight:600">CLEAN FRAMES</div>
+          <div style="font-size:1.1rem;font-weight:700;color:#34D399">g &asymp; 0</div>
+          <div style="font-size:0.55rem;color:rgba(255,255,255,0.4)">skip temporal</div>
+        </div>
+        <div style="flex:1;background:rgba(251,146,60,0.1);border:1px solid rgba(251,146,60,0.3);border-radius:8px;padding:8px;text-align:center">
+          <div style="font-size:0.6rem;color:#FB923C;font-weight:600">DEGRADED FRAMES</div>
+          <div style="font-size:1.1rem;font-weight:700;color:#FB923C">g &asymp; 0.1</div>
+          <div style="font-size:0.55rem;color:rgba(255,255,255,0.4)">receive clean context</div>
+        </div>
+      </div>
+    </div>
+  </div>
 </section>
 
 <!-- CIFAR-10-C Results -->
@@ -1289,6 +1345,84 @@ function initCULane() {
 }
 
 // Init
+// Spatial σ map rendering
+function drawSigmaMap(canvasId, mode) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  const cellW = w / 16, cellH = h / 9;
+
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 16; c++) {
+      let sigma;
+      if (mode === 'normal') {
+        sigma = 0.8 + Math.random() * 0.15;  // mostly high
+      } else {
+        // Dark: top is darker, bottom has some light (headlights)
+        const yFactor = r / 9;
+        sigma = 0.05 + yFactor * 0.2 + Math.random() * 0.08;
+        // Road center slightly higher (lane markings visible)
+        if (c > 5 && c < 11 && r > 5) sigma += 0.1;
+      }
+      sigma = Math.max(0, Math.min(1, sigma));
+
+      // Color: red(0) → yellow(0.5) → green(1)
+      let red, green, blue;
+      if (sigma < 0.5) {
+        red = 220; green = Math.floor(sigma * 2 * 200); blue = 60;
+      } else {
+        red = Math.floor((1 - sigma) * 2 * 220); green = 180; blue = 60;
+      }
+      ctx.fillStyle = `rgb(${red},${green},${blue})`;
+      ctx.fillRect(c * cellW, r * cellH, cellW - 0.5, cellH - 0.5);
+
+      // Show value on hover-sized cells
+      if (cellW > 6) {
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.font = '6px Inter';
+        ctx.fillText(sigma.toFixed(1), c * cellW + 1, r * cellH + cellH - 1);
+      }
+    }
+  }
+}
+
+function updateSigmaMaps() {
+  drawSigmaMap('sigma-map-normal', 'normal');
+  drawSigmaMap('sigma-map-dark', 'dark');
+}
+
+// Animate σ maps when video plays
+function animateSigmaMaps() {
+  drawSigmaMap('sigma-map-normal', 'normal');
+  drawSigmaMap('sigma-map-dark', 'dark');
+}
+
+// Temporal gate bars for realtime section
+function initTemporalGateBars() {
+  const container = document.getElementById('temporal-gate-bars');
+  if (!container) return;
+  const frames = [
+    {label:'f0', gate:0.004, color:'#34D399', desc:'clean'},
+    {label:'f1', gate:0.016, color:'#34D399', desc:'approach'},
+    {label:'f2', gate:0.067, color:'#FBBF24', desc:'entry'},
+    {label:'f3', gate:0.101, color:'#F87171', desc:'inside'},
+    {label:'f4', gate:0.092, color:'#F87171', desc:'inside+n'},
+    {label:'f5', gate:0.040, color:'#FBBF24', desc:'exit'},
+    {label:'f6', gate:0.026, color:'#34D399', desc:'recover'},
+    {label:'f7', gate:0.004, color:'#34D399', desc:'clean'},
+  ];
+  const maxGate = 0.12;
+  container.innerHTML = frames.map(f => {
+    const h = Math.max(4, (f.gate / maxGate) * 100);
+    return `<div style="flex:1;text-align:center;display:flex;flex-direction:column;justify-content:flex-end;height:100%">
+      <div style="font-size:0.55rem;color:${f.color};font-weight:600;margin-bottom:2px">${f.gate.toFixed(3)}</div>
+      <div style="height:${h}%;background:${f.color};border-radius:4px 4px 0 0;transition:height 0.5s;min-height:4px;opacity:0.85"></div>
+      <div style="font-size:0.5rem;color:rgba(255,255,255,0.4);margin-top:3px">${f.label}</div>
+    </div>`;
+  }).join('');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   updateDemo();
   initTunnel();
@@ -1296,6 +1430,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initTopImprovements();
   initCULane();
   initBiSSM();
+  updateSigmaMaps();
+  initTemporalGateBars();
 
   // Scroll animations
   const observer = new IntersectionObserver((entries) => {
