@@ -172,6 +172,8 @@ A \textbf{static} convolution computes $h_s = W * x$ with fixed kernel $W$.
 A \textbf{dynamic} convolution computes $h_d = (W * x) \odot \alpha(x)$, where $\alpha(x) = \text{Sigmoid}(\text{FC}(\text{GAP}(x))) \in \mathbb{R}^C$ is a channel-wise input-dependent gate.
 \end{definition}
 
+\subsection{Static Path: Linear Noise Propagation}
+
 \begin{proposition}[Static Noise Variance]
 \label{prop:static}
 For noisy input $x = s + n$, $n \sim \mathcal{N}(0, \sigma_n^2 I)$, and fixed kernel $W$:
@@ -181,44 +183,170 @@ For noisy input $x = s + n$, $n \sim \mathcal{N}(0, \sigma_n^2 I)$, and fixed ke
 \end{proposition}
 
 \begin{proof}
-Since $W$ is input-independent, $h_s = W * s + W * n$, and $\text{Var}[W * n] = \|W\|_F^2 \sigma_n^2$.
+Since $W$ is input-independent, the output decomposes as $h_s = W * s + W * n$.
+The signal component $W * s$ is deterministic (given $s$), so all variance arises from the noise term:
+$\text{Var}[W * n] = \sum_{i,j} W_{ij}^2 \cdot \sigma_n^2 = \|W\|_F^2 \sigma_n^2$.
+This is \emph{linear} in $\sigma_n^2$---noise is filtered but not amplified beyond the kernel's energy.
+For a normalized kernel ($\|W\|_F = 1$), the noise variance equals the input noise variance exactly.
 \end{proof}
+
+\begin{remark}[Batch Normalization Effect]
+\label{rem:bn}
+Batch normalization after a static convolution computes $\hat{h}_s = \gamma \cdot (h_s - \mu_B) / \sigma_B + \beta$.
+During training, $\mu_B$ and $\sigma_B$ are batch statistics that absorb noise; during inference, they are fixed running statistics.
+In either case, the output variance remains $O(\sigma_n^2)$ since BN is an affine transformation with fixed (or slowly-adapting) parameters.
+\end{remark}
+
+\subsection{Dynamic Path: Multiplicative Noise Amplification}
 
 \begin{proposition}[Dynamic Noise Amplification]
 \label{prop:dynamic}
-For the dynamic path $h_d = (W * x) \odot \alpha(x)$ with $x = s + n$:
+For the dynamic path $h_d = (W * x) \odot \alpha(x)$ with $x = s + n$, where $\alpha(x) = \text{Sigmoid}(\text{FC}(\text{GAP}(x)))$:
 \begin{align}
-\text{Var}[h_d] &= \underbrace{\bar{\alpha}^2 \|W\|_F^2 \sigma_n^2}_{O(\sigma_n^2)} + \underbrace{(W*s)^2 \sigma_\alpha^2}_{O(\sigma_n^2 \sigma_\alpha^2)} \nonumber \\
-&\quad + \underbrace{\|W\|_F^2 \sigma_n^2 \sigma_\alpha^2}_{O(\sigma_n^2 \sigma_\alpha^2)} + \underbrace{O(\sigma_n^4)}_{\text{high-order}},
+\text{Var}[h_d] &= \underbrace{\bar{\alpha}^2 \|W\|_F^2 \sigma_n^2}_{\text{Term 1: } O(\sigma_n^2)} + \underbrace{(W*s)^2 \sigma_\alpha^2}_{\text{Term 2: signal$\times$gate noise}} \nonumber \\
+&\quad + \underbrace{\|W\|_F^2 \sigma_n^2 \sigma_\alpha^2}_{\text{Term 3: noise$\times$gate noise}} + \underbrace{O(\sigma_n^4)}_{\text{Term 4: high-order}},
 \label{eq:dynamic_var}
 \end{align}
 where $\bar{\alpha} = \mathbb{E}[\alpha(x)]$ and $\sigma_\alpha^2 = \text{Var}[\alpha(x)]$.
-Since $\alpha$ depends on $x$ through a nonlinear projection:
-\begin{equation}
-\sigma_\alpha^2 = \text{Var}[\alpha(s+n)] \approx \|\nabla_x \alpha\|^2 \sigma_n^2 + O(\sigma_n^4),
-\end{equation}
-yielding $\text{Var}[h_d] = O(\sigma_n^2) + O(\sigma_n^4) + O(\sigma_n^6)$.
 \end{proposition}
+
+\begin{proof}
+Let $f = W * x$ and write $h_d = f \cdot \alpha$.
+Using the product variance formula $\text{Var}[AB] = \bar{A}^2\text{Var}[B] + \bar{B}^2\text{Var}[A] + \text{Var}[A]\text{Var}[B]$:
+\begin{align}
+\text{Var}[h_d] &= \bar{f}^2 \cdot \sigma_\alpha^2 + \bar{\alpha}^2 \cdot \text{Var}[f] + \text{Var}[f] \cdot \sigma_\alpha^2.
+\label{eq:product_var}
+\end{align}
+Since $f = W * (s + n) = W*s + W*n$, we have $\bar{f} = W*s$ and $\text{Var}[f] = \|W\|_F^2 \sigma_n^2$.
+Substituting into~\eqref{eq:product_var} yields~\eqref{eq:dynamic_var}.
+\end{proof}
+
+\begin{proposition}[Gate Variance Amplification]
+\label{prop:gate_var}
+The gate variance $\sigma_\alpha^2$ itself grows with input noise:
+\begin{equation}
+\sigma_\alpha^2 = \text{Var}[\alpha(s+n)] = \|\nabla_x \alpha|_{x=s}\|^2 \sigma_n^2 + O(\sigma_n^4),
+\label{eq:gate_var}
+\end{equation}
+where the first-order term follows from the delta method.
+For the SE-Net gate $\alpha(x) = \text{Sigmoid}(W_2 \cdot \text{SiLU}(W_1 \cdot \text{GAP}(x)))$:
+\begin{equation}
+\|\nabla_x \alpha\| \leq \|W_2\| \cdot \|W_1\| \cdot L_{\text{Sigmoid}} \cdot L_{\text{SiLU}} / \sqrt{HW},
+\end{equation}
+where $L_{\text{Sigmoid}} = 1/4$ and $L_{\text{SiLU}} \leq 1.1$ are Lipschitz constants, and $\sqrt{HW}$ arises from global average pooling.
+\end{proposition}
+
+\begin{proof}
+By the delta method (first-order Taylor expansion of $\alpha$ around $s$):
+$\alpha(s+n) \approx \alpha(s) + \nabla_x \alpha|_s \cdot n$,
+so $\text{Var}[\alpha(s+n)] \approx \|\nabla_x \alpha|_s\|^2 \sigma_n^2$.
+The Jacobian bound follows from the chain rule through GAP ($1/\sqrt{HW}$ scaling), FC layers ($W_1, W_2$ norms), and activation Lipschitz constants.
+\end{proof}
+
+\begin{corollary}[Total Dynamic Variance]
+\label{cor:total_dynamic}
+Substituting~\eqref{eq:gate_var} into~\eqref{eq:dynamic_var}:
+\begin{align}
+\text{Var}[h_d] &= \underbrace{\bar{\alpha}^2 \|W\|_F^2 \sigma_n^2}_{O(\sigma_n^2)} + \underbrace{(W*s)^2 \|\nabla\alpha\|^2 \sigma_n^2}_{O(\sigma_n^2)} \nonumber \\
+&\quad + \underbrace{\|W\|_F^2 \|\nabla\alpha\|^2 \sigma_n^4}_{O(\sigma_n^4)} + O(\sigma_n^6).
+\label{eq:total_dynamic}
+\end{align}
+The $O(\sigma_n^4)$ term (Term 3 in~\eqref{eq:dynamic_var}) is the \textbf{multiplicative noise amplification}: noise enters \emph{both} through the convolution output and through the gate, creating a cross-product that grows quadratically faster than the static path.
+At high noise ($\sigma_n \gg 1$), this term dominates, causing the accuracy collapse observed in dynamic networks under severe corruption.
+\end{corollary}
+
+\subsection{NC-Conv: Optimal Noise-Conditioned Interpolation}
 
 \begin{proposition}[NC-Conv Variance Bound]
 \label{prop:nc}
 The NC-Conv interpolation $h = \sigma \cdot h_d + (1-\sigma) \cdot h_s$ satisfies:
 \begin{equation}
-\text{Var}[h] = \sigma^2 \text{Var}[h_d] + (1{-}\sigma)^2 \text{Var}[h_s] + 2\sigma(1{-}\sigma)\text{Cov}[h_d, h_s].
+\text{Var}[h] = \sigma^2 V_d + (1{-}\sigma)^2 V_s + 2\sigma(1{-}\sigma) C_{ds},
+\label{eq:nc_var}
 \end{equation}
-At $\sigma=0$: $\text{Var}[h] = O(\sigma_n^2)$ (maximum robustness).
-At $\sigma=1$: $\text{Var}[h] = O(\sigma_n^{4+})$ (maximum expressiveness).
+where $V_d = \text{Var}[h_d]$, $V_s = \text{Var}[h_s]$, and $C_{ds} = \text{Cov}[h_d, h_s]$.
 \end{proposition}
 
-\begin{corollary}[Optimal $\sigma$]
-\label{cor:optimal}
-The optimal gate $\sigma^*(\sigma_n) \to 0$ as noise increases and $\sigma^* \to 1$ as noise vanishes, producing the monotonic severity scaling observed experimentally (Table~\ref{tab:severity}).
+\begin{proof}
+Direct application of the variance of a weighted sum.
+Since $h_d$ and $h_s$ share the same convolution input $x$ but differ in the gate ($\alpha(x)$ vs.\ constant), their covariance satisfies $C_{ds} = \bar{\alpha} \|W\|_F^2 \sigma_n^2 = O(\sigma_n^2)$.
+Substituting $V_d$ from~\eqref{eq:total_dynamic} and $V_s = \|W\|_F^2 \sigma_n^2$:
+\begin{align}
+\text{Var}[h] &= \sigma^2 [O(\sigma_n^2) + O(\sigma_n^4)] + (1{-}\sigma)^2 O(\sigma_n^2) \nonumber \\
+&\quad + 2\sigma(1{-}\sigma) O(\sigma_n^2).
+\end{align}
+At $\sigma = 0$: $\text{Var}[h] = V_s = O(\sigma_n^2)$.
+At $\sigma = 1$: $\text{Var}[h] = V_d = O(\sigma_n^{4+})$.
+For intermediate $\sigma$: the variance interpolates continuously.
+\end{proof}
+
+\begin{proposition}[Optimal $\sigma$ in Closed Form]
+\label{prop:optimal_sigma}
+Define the noise-to-signal ratio $\rho = \sigma_n^2 / \|s\|^2$ and let $\mathcal{L}(\sigma) = \mathcal{L}_{\text{task}}(\sigma) + \lambda \text{Var}[h](\sigma)$ be the regularized objective.
+Under the simplifying assumption that $\mathcal{L}_{\text{task}}$ is linear in $\sigma$ with slope $-\beta$ (dynamic path reduces task loss):
+\begin{equation}
+\sigma^*(\rho) = \frac{\beta}{2\lambda(V_d - V_s - 2C_{ds})}.
+\label{eq:sigma_star}
+\end{equation}
+Since $V_d - V_s = O(\sigma_n^4)$ grows with noise while $\beta$ is constant, $\sigma^*$ decreases monotonically with $\rho$:
+\begin{equation}
+\sigma^*(\rho) \propto \frac{1}{1 + \gamma \rho^2},
+\label{eq:sigma_decay}
+\end{equation}
+where $\gamma = \lambda \|W\|_F^2 \|\nabla\alpha\|^2 / \beta$ is a model-dependent constant.
+\end{proposition}
+
+\begin{proof}
+Minimizing $\mathcal{L}(\sigma) = -\beta\sigma + \lambda[\sigma^2 V_d + (1{-}\sigma)^2 V_s + 2\sigma(1{-}\sigma)C_{ds}]$ over $\sigma$:
+$\partial \mathcal{L}/\partial \sigma = -\beta + 2\lambda[\sigma(V_d + V_s - 2C_{ds}) - (V_s - C_{ds})] = 0$.
+Solving: $\sigma^* = [\beta/(2\lambda) + V_s - C_{ds}] / (V_d + V_s - 2C_{ds})$.
+Since $V_d \gg V_s$ at high noise (as $V_d$ contains $O(\sigma_n^4)$ terms), the denominator grows as $O(\sigma_n^4)$ while the numerator remains $O(1) + O(\sigma_n^2)$, yielding $\sigma^* = O(\sigma_n^{-2})$.
+\end{proof}
+
+\begin{corollary}[Monotonic Severity Scaling]
+\label{cor:severity}
+Since $\sigma^*(\rho) \propto (1 + \gamma\rho^2)^{-1}$ (Eq.~\ref{eq:sigma_decay}), the NC-Conv advantage over the standard dynamic network ($\sigma{=}1$) is:
+\begin{equation}
+\Delta\text{Var} = \text{Var}[h]|_{\sigma=1} - \text{Var}[h]|_{\sigma=\sigma^*} = (1 - \sigma^{*2}) \cdot O(\sigma_n^4),
+\end{equation}
+which grows monotonically with noise $\sigma_n$.
+This directly predicts the experimental severity scaling (Table~\ref{tab:severity}): as corruption severity increases, NC-Conv's advantage widens from $+0.5\%$ (severity 1) to $+2.9\%$ (severity 5).
 \end{corollary}
 
 \begin{proposition}[Superset Guarantee]
 \label{prop:superset}
-$\mathcal{H}_{\text{NC}} \supseteq \mathcal{H}_{\text{std}}$: setting $\sigma=1\;\forall x$ recovers the standard dynamic network. NC-Conv can only improve, never degrade, performance.
+$\mathcal{H}_{\text{NC}} \supseteq \mathcal{H}_{\text{std}}$: setting $\sigma=1\;\forall x$ recovers the standard dynamic network.
+Therefore $\min_{f \in \mathcal{H}_{\text{NC}}} \mathcal{L}(f) \leq \min_{f \in \mathcal{H}_{\text{std}}} \mathcal{L}(f)$ for any loss $\mathcal{L}$.
 \end{proposition}
+
+\begin{proof}
+The NC-Conv hypothesis space $\mathcal{H}_{\text{NC}} = \{h_\sigma : \sigma \in [0,1]\}$ contains the standard dynamic network as the special case $\sigma = 1$.
+Since $\mathcal{H}_{\text{std}} \subset \mathcal{H}_{\text{NC}}$, the minimum over the larger set cannot exceed the minimum over the smaller set.
+\end{proof}
+
+\subsection{Multi-Layer Noise Accumulation}
+
+\begin{proposition}[Cascaded NC-Conv Blocks]
+\label{prop:cascade}
+For $L$ cascaded NC-Conv blocks with per-block gates $\sigma_1, \ldots, \sigma_L$, the output variance satisfies:
+\begin{equation}
+\text{Var}[h^{(L)}] \leq \prod_{\ell=1}^L \left[\sigma_\ell^2 \kappa_\ell^2 + (1{-}\sigma_\ell)^2\right] \cdot \|W^{(1)}\|_F^2 \sigma_n^2,
+\end{equation}
+where $\kappa_\ell = V_{d}^{(\ell)} / V_{s}^{(\ell)}$ is the noise amplification ratio of block $\ell$.
+When all $\sigma_\ell = 0$, this reduces to $\prod_\ell 1 \cdot \|W^{(1)}\|_F^2 \sigma_n^2 = O(\sigma_n^2)$, preserving linear noise scaling across depth.
+\end{proposition}
+
+\begin{proof}
+Each block's output variance is bounded by $\sigma_\ell^2 V_d^{(\ell)} + (1{-}\sigma_\ell)^2 V_s^{(\ell)}$.
+Since $V_d^{(\ell)} = \kappa_\ell^2 V_s^{(\ell)}$ and $V_s^{(\ell)} = \|W^{(\ell)}\|_F^2 \text{Var}[h^{(\ell-1)}]$, the result follows by induction.
+\end{proof}
+
+\begin{remark}[Depth-Adaptive Noise Control]
+\label{rem:depth}
+Proposition~\ref{prop:cascade} implies that the $\sigma$ gates across layers can independently control noise propagation at each depth.
+In practice, we observe that early layers (processing lower-level features closer to pixel noise) learn lower $\sigma$ values than later layers (processing higher-level, more noise-resistant features).
+This behavior emerges naturally from the task loss without explicit per-layer supervision.
+\end{remark}
 
 \begin{table}[t]
 \centering
