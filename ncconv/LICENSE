@@ -1,0 +1,112 @@
+NC-Conv-SSM Vision (ncconv/) -- Dual License
+Academic (Non-Commercial) + Commercial
+
+Copyright (c) 2026-2027 Jin Ho Choi, SmartEAR
+
+This LICENSE governs the Vision source code in the `ncconv/` directory
+(Noise-Conditioned Convolution + temporal NC-SSM for degraded-vision
+perception), targeted at ICCV 2027 / BMVC 2026 / ACCV 2026 / CVPR 2027
+and IEEE TIP 2027. For the repository-wide NC-SSM audio license, see
+the root-level LICENSE file. Where the two licenses cover the same
+artifact, this LICENSE controls for code under `ncconv/`.
+
+-------------------------------------------------------------------------------
+1. ACADEMIC / NON-COMMERCIAL LICENSE
+-------------------------------------------------------------------------------
+
+Permission is hereby granted, free of charge, to any person or academic
+institution obtaining a copy of this software and associated documentation
+files (the "Software"), to use, copy, modify, and distribute the Software
+for ACADEMIC, EDUCATIONAL, OR NON-COMMERCIAL RESEARCH PURPOSES ONLY, subject
+to the following conditions:
+
+  (a) The above copyright notice and this permission notice shall be
+      included in all copies or substantial portions of the Software.
+
+  (b) Any academic publication, preprint, thesis, or public presentation
+      that uses or derives from this Software shall cite at least one of
+      the NC-Conv-SSM Vision papers:
+
+        J. H. Choi, "Noise-Conditioned Convolution: Bridging Dynamic
+        Expressiveness and Static Robustness for Degraded Vision,"
+        Proc. IEEE/CVF International Conference on Computer Vision
+        (ICCV), 2027 (submitted).
+
+        J. H. Choi, "NC-Conv-SSM: A Unified Noise-Conditioned Framework
+        for Degradation-Robust Visual Recognition," IEEE Transactions on
+        Image Processing, 2027 (submitted).
+
+      Companion venues covering overlapping material (cite whichever
+      matches the reviewed version):
+
+        J. H. Choi, "NC-Conv: Noise-Conditioned Dual-Path Convolution,"
+        Proc. BMVC, 2026 (submitted).
+
+        J. H. Choi, "NC-Conv for Degraded Vision," Proc. ACCV, 2026
+        (submitted).
+
+        J. H. Choi, "NC-Conv-SSM: Degradation-Robust Vision with
+        Dual-Path Blending," Proc. CVPR, 2027 (submitted).
+
+  (c) Modifications must be clearly marked as such and must not be
+      misrepresented as the original Software.
+
+"Non-commercial" means any use that is not intended for or directed toward
+commercial advantage or monetary compensation. Evaluation, benchmarking,
+and reproduction of published results by for-profit entities in the course
+of academic collaboration (without product integration) remain permitted.
+
+-------------------------------------------------------------------------------
+2. COMMERCIAL USE
+-------------------------------------------------------------------------------
+
+ANY COMMERCIAL USE of the Software, in whole or in part, including but not
+limited to:
+
+    - incorporation into a commercial product, service, or SaaS offering,
+    - use in internal business operations of a for-profit entity,
+    - automotive, drone, surveillance, or industrial deployment,
+    - training data generation for commercial vision models,
+    - hardware (ASIC / FPGA / MCU / NPU) implementations sold or licensed
+      to third parties,
+    - redistribution as part of a commercial software bundle,
+
+REQUIRES A SEPARATE COMMERCIAL LICENSE from the copyright holder.
+
+"Commercial use" explicitly includes the commercialization of academic
+research outputs: if a project originally carried out under the Academic
+License later enters a commercialization path (spin-off, licensing,
+product development, revenue-generating deployment), a Commercial License
+must be obtained BEFORE such activity begins.
+
+To request a commercial license, contact:
+
+    Dr. Jin Ho Choi -- SmartEAR
+    Email:   jinhochoi@smartear.co.kr
+    Subject: [NC-Conv-SSM Commercial License] <your organization>
+
+See COMMERCIAL_LICENSE.md (in this directory) for commercial licensing
+terms, tiers, and pricing framework.
+
+-------------------------------------------------------------------------------
+3. PATENT NOTICE
+-------------------------------------------------------------------------------
+
+Technologies embodied in this Software are subject to pending patent
+applications in the Republic of Korea and the United States (NanoMamba /
+NC-SSM family -- including the NC-Conv spatial variant and the bidirectional
+temporal NC-SSM for video). The Academic License does not grant any patent
+rights for commercial exploitation. Commercial patent rights are granted
+only through a Commercial License executed with the copyright holder.
+
+-------------------------------------------------------------------------------
+4. DISCLAIMER
+-------------------------------------------------------------------------------
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
