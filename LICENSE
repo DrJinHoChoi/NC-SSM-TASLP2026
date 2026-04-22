@@ -1,4 +1,4 @@
-NanoMamba — Dual License
+NanoMamba / NC-SSM / NC-TCN — Dual License
 
 Copyright (c) 2026 Jin Ho Choi. All rights reserved.
 
@@ -23,10 +23,13 @@ This project is available under a dual licensing model:
    distribute the Software, subject to the following conditions:
 
    (a) Attribution: Any publication or presentation using this Software
-       must cite the following paper:
+       must cite one or more of the following papers:
 
-       J. H. Choi, "NanoMamba: Noise Robustness by Architectural Design
-       in State Space Models for Keyword Spotting," Proc. Interspeech, 2026.
+       J. H. Choi, "NC-SSM: Noise-Conditioned State Space Models for
+       Noise-Robust Keyword Spotting," Proc. Interspeech, 2026.
+
+       J. H. Choi, "NC-TCN: Noise-Conditioned Temporal Convolutional
+       Networks for Noise-Robust Keyword Spotting," Proc. ICASSP, 2027.
 
    (b) This copyright notice and license shall be included in all copies
        or substantial portions of the Software.

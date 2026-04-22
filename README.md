@@ -41,7 +41,50 @@ NanoMamba-Interspeech2026/
 └── README.md
 ```
 
+## Reproducing the Paper (TASLP 2026)
+
+For reviewers: a single-command script re-evaluates all shipped
+checkpoints against the numbers reported in the paper.
+
+```bash
+# smoke test (~1-2 min on GPU): clean + factory @ 0 dB, all models
+python reproduce_taslp.py --quick
+
+# full reproduction (~30-60 min on GPU): 5 noise types x 7 SNRs
+python reproduce_taslp.py --full
+
+# pick a specific condition / model
+python reproduce_taslp.py --noise-type babble --snr -5
+python reproduce_taslp.py --models NC-SSM,BC-ResNet-1,DS-CNN-S
+
+# point at a pre-downloaded Google Speech Commands V2 copy
+python reproduce_taslp.py --data-dir /path/to/gsc_v2
+```
+
+The script:
+- checks the Python environment (torch, torchaudio, CUDA),
+- auto-locates Google Speech Commands V2 under `./data/` or `~/data/`
+  (otherwise prints download instructions),
+- loads the pre-trained checkpoints from `checkpoints_full/`,
+- evaluates each model on clean test and noise-mixed test audio, and
+- prints a measured-vs-paper table, exiting `0` when all comparable
+  rows fall within `--tol` (default 2.0 %p).
+
+Relevant flags: `--data-dir`, `--noise-type`, `--snr`, `--full`, `--tol`,
+`--quick`, `--models`, `--seed`. See `python reproduce_taslp.py --help`.
+
+If you don't have a local GPU, use `colab/NanoMamba_Test.ipynb` which
+downloads the dataset automatically on Colab.
+
 ## Quick Start (Colab)
+
+**One-click reviewer notebooks (auto-downloads Google Speech Commands V2):**
+
+- [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/DrJinHoChoi/NC-SSM-TASLP2026/blob/main/colab/NanoMamba_Test.ipynb) **NanoMamba_Test** -- evaluate shipped checkpoints on clean + noise grid.
+- [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/DrJinHoChoi/NC-SSM-TASLP2026/blob/main/colab/SmartEar_KWS_Colab.ipynb) **SmartEar_KWS_Colab** -- full training of all 9 models + noise evaluation.
+- [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/DrJinHoChoi/NC-SSM-TASLP2026/blob/main/NanoMamba_Train.ipynb) **NanoMamba_Train** -- canonical end-to-end training notebook.
+
+Manual steps:
 
 1. Open `colab/SmartEar_KWS_Colab.ipynb` in Google Colab
 2. Select GPU runtime (T4 or better)
