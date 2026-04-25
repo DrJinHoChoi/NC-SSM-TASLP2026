@@ -1,69 +1,83 @@
-NanoMamba / NC-SSM / NC-TCN — Dual License
+NC-SSM-TASLP2026 — Dual License: Academic (Non-Commercial) + Commercial
 
-Copyright (c) 2026 Jin Ho Choi. All rights reserved.
+Copyright (c) 2026 Jin Ho Choi, SmartEAR / NanoAgentic AI
 
-SPDX-License-Identifier: CC-BY-NC-4.0 AND LicenseRef-Commercial
+-------------------------------------------------------------------------------
+1. ACADEMIC / NON-COMMERCIAL LICENSE
+-------------------------------------------------------------------------------
 
-This project is available under a dual licensing model:
-- Non-commercial use: Creative Commons Attribution-NonCommercial 4.0
-  International (CC BY-NC 4.0) — see Section 1 below or visit
-  https://creativecommons.org/licenses/by-nc/4.0/
-- Commercial use: Requires a separate written license — see Section 2 below.
+Permission is hereby granted, free of charge, to any person or academic
+institution obtaining a copy of this software and associated documentation
+files (the "Software"), to use, copy, modify, and distribute the Software
+for ACADEMIC, EDUCATIONAL, OR NON-COMMERCIAL RESEARCH PURPOSES ONLY, subject
+to the following conditions:
 
+  (a) The above copyright notice and this permission notice shall be
+      included in all copies or substantial portions of the Software.
 
-1. ACADEMIC & RESEARCH USE — CC BY-NC 4.0 (Free)
+  (b) Any academic publication, preprint, thesis, or public presentation
+      that uses or derives from this Software shall cite the relevant
+      paper(s) listed in the repository README, when applicable.
 
-   This work is licensed under the Creative Commons
-   Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0).
+  (c) Modifications must be clearly marked as such and must not be
+      misrepresented as the original Software.
 
-   Permission is hereby granted, free of charge, to any person or
-   organization obtaining a copy of this software and associated
-   documentation files (the "Software") for academic, research, or
-   personal non-commercial purposes, to use, copy, modify, and
-   distribute the Software, subject to the following conditions:
+"Non-commercial" means any use that is not intended for or directed toward
+commercial advantage or monetary compensation. Evaluation, benchmarking,
+and reproduction of published results by for-profit entities in the course
+of academic collaboration (without product integration) remain permitted.
 
-   (a) Attribution: Any publication or presentation using this Software
-       must cite one or more of the following papers:
+-------------------------------------------------------------------------------
+2. COMMERCIAL USE
+-------------------------------------------------------------------------------
 
-       J. H. Choi, "NC-SSM: Noise-Conditioned State Space Models for
-       Noise-Robust Keyword Spotting," Proc. Interspeech, 2026.
+ANY COMMERCIAL USE of the Software, in whole or in part, including but not
+limited to:
 
-       J. H. Choi, "NC-TCN: Noise-Conditioned Temporal Convolutional
-       Networks for Noise-Robust Keyword Spotting," Proc. ICASSP, 2027.
+    - incorporation into a commercial product, service, or SaaS offering,
+    - use in internal business operations of a for-profit entity,
+    - defense, aerospace, or industrial deployment,
+    - training data generation for commercial models,
+    - hardware (ASIC/FPGA/MCU) implementations sold or licensed to
+      third parties,
+    - redistribution as part of a commercial software bundle,
 
-   (b) This copyright notice and license shall be included in all copies
-       or substantial portions of the Software.
+REQUIRES A SEPARATE COMMERCIAL LICENSE from the copyright holder.
 
-   (c) No commercial use is permitted without a separate commercial license.
+"Commercial use" explicitly includes the commercialization of academic
+research outputs: if a project originally carried out under the Academic
+License later enters a commercialization path (spin-off, licensing,
+product development, revenue-generating deployment), a Commercial License
+must be obtained BEFORE such activity begins.
 
+To request a commercial license, contact:
 
-2. COMMERCIAL USE (License Required)
+    Dr. Jin Ho Choi — SmartEAR / NanoAgentic AI
+    Email:   jinhochoi@smartear.co.kr
+    Subject: [NC-SSM-TASLP2026 Commercial License] <your organization>
 
-   Commercial use of the Software — including but not limited to:
-   product integration, embedding in commercial hardware or firmware,
-   SaaS or cloud service deployment, sale or distribution of derivative
-   works, or use in any revenue-generating product or service — requires
-   a separate written commercial license agreement.
+See COMMERCIAL_LICENSE.md for commercial licensing terms, tiers, and
+pricing framework.
 
-   For commercial licensing inquiries, contact:
-
-       Jin Ho Choi
-       Email: jinhochoi@smartear.co.kr
-
-
+-------------------------------------------------------------------------------
 3. PATENT NOTICE
+-------------------------------------------------------------------------------
 
-   This Software implements methods that are the subject of pending
-   patent application(s). Commercial use may require a patent license
-   in addition to the software license. Contact the author for details.
+Technologies embodied in this Software may be subject to pending patent
+applications in the Republic of Korea and the United States (NanoMamba /
+NC-SSM / NC-Conv-SSM family, and COP-RFS tracking framework). The Academic
+License does not grant any patent rights for commercial exploitation.
+Commercial patent rights are granted only through a Commercial License
+executed with the copyright holder.
 
+-------------------------------------------------------------------------------
+4. DISCLAIMER
+-------------------------------------------------------------------------------
 
-4. DISCLAIMER OF WARRANTY
-
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-   CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-   TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-   SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
